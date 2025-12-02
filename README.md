@@ -1,51 +1,63 @@
-# VRChat Setup Scripts
+# VRChat Unity Project Setup Scripts
 
-Script automatizzati per la creazione e configurazione di progetti VRChat Unity.
+Automated scripts to create and configure VRChat Unity projects, add VPM packages, and manage setup workflows.
 
-## 📦 Struttura
+## 🎯 Purpose
+
+This folder contains a set of scripts that help you quickly create, configure, and maintain VRChat Unity projects, including support for importing Unity packages and managing VPM packages/versions.
+
+## 📦 Structure
 
 ```
 UNITY PROJECTS SCRIPT/
-├── Setup Project.bat          # Launcher principale
+├── vrcsetupfull.bat        # Launcher or entry point
 └── setup-scripts/
-    ├── vrcsetup-wizard.ps1    # Wizard interattivo
-    ├── vrcsetupflowye.ps1     # Script principale
-    └── vrcsetup.config        # Configurazione (generato al primo avvio)
+    ├── vrcsetup-wizard.ps1 # Interactive setup wizard
+    ├── vrcsetupflowye.ps1  # Main setup automation script
+    └── vrcsetup.config     # Generated configuration file at first run
 ```
 
-## 🚀 Utilizzo
+## 🚀 Quickstart
 
-### Avvio Rapido
-
-Esegui `Setup Project.bat` per aprire il wizard interattivo.
-
-### Modalità Wizard
-
-Il wizard offre le seguenti opzioni:
-
-1. **Creare nuovo progetto da UnityPackage** - Crea un progetto Unity e importa un .unitypackage
-2. **Setup VRChat su progetto esistente** - Aggiunge VPM packages a un progetto esistente
-3. **Configura VPM packages** - Gestisci i pacchetti VPM e le loro versioni
-4. **Reset configurazione** - Resetta la configurazione
-
-### Modalità CLI
+Run the script from PowerShell or via `vrcsetupfull.bat` to open the interactive wizard:
 
 ```powershell
-# Crea progetto da UnityPackage
-.\vrcsetupflowye.ps1 "C:\Path\To\Package.unitypackage"
+# In PowerShell
+.\setup-scripts\vrcsetupflowye.ps1
 
-# Setup su progetto esistente
-.\vrcsetupflowye.ps1 "C:\Path\To\UnityProject"
-
-# Reset configurazione
-.\vrcsetupflowye.ps1 -reset
+# Or execute the top-level .bat (Windows)
+vrcsetupfull.bat
 ```
 
-## ⚙️ Configurazione VPM Packages
+## 🧭 Modes of Operation
 
-### Formato Configurazione
+### Wizard Mode
+The wizard offers the following options:
 
-I pacchetti VPM sono ora configurabili con versioni specifiche nel file `vrcsetup.config`:
+1. Create a new Unity project from a `.unitypackage` and import it.
+2. Configure VRChat on an existing Unity project by adding required VPM packages.
+3. Manage VPM packages and their versions (Add/Change/Remove packages).
+4. Reset the configuration to defaults.
+
+### CLI Mode
+You can run the main script in scripted mode from command line:
+
+```powershell
+# Create project from UnityPackage
+.\setup-scripts\vrcsetupflowye.ps1 "C:\Path\To\Package.unitypackage"
+
+# Setup an existing project
+.\setup-scripts\vrcsetupflowye.ps1 "C:\Path\To\UnityProject"
+
+# Reset configuration
+.\setup-scripts\vrcsetupflowye.ps1 -reset
+```
+
+## ⚙️ VPM Packages Configuration
+
+The VPM packages included in the project are configurable in `vrcsetup.config` using package names and versions.
+
+Example config snippet:
 
 ```json
 {
@@ -60,47 +72,26 @@ I pacchetti VPM sono ora configurabili con versioni specifiche nel file `vrcsetu
 }
 ```
 
-### Gestione Versioni
+- `latest` installs the newest version available.
+- You can specify exact versions like `"3.5.0"` to lock to a specific release.
+- The script validates versions with `vpm show package <package_name>`.
 
-- **`"latest"`** - Installa l'ultima versione disponibile
-- **`"3.5.0"`** - Installa una versione specifica
-- La validazione delle versioni avviene tramite `vpm show package <nome>`
+## 🔄 Migration from Old Format
+Older config files that used a simple array of package names are migrated automatically into the new dict format with `latest` as a default version.
 
-### Operazioni Disponibili nel Wizard
+## 📝 Changelog (summary)
 
-Dal menu "Configura VPM packages" puoi:
+- v2.0 - 26/10/2025: Added support for configurable package versions, migration, and validation.
+- v1.0: Initial release with .unitypackage-based setup, VPM configuration, and interactive wizard.
 
-- **Aggiungere package** - Specifica nome e versione (con validazione)
-- **Modificare versione** - Cambia la versione di un package esistente
-- **Rimuovere package** - Elimina un package dalla configurazione
-- **Salvare** - Salva le modifiche nel file config
+## 🛠️ Advanced Notes
 
-## 🔄 Migrazione da Vecchio Formato
+- The script integrates with Unity via the editor path configured in the `vrcsetup.config` file.
+- Ensure PowerShell execution policies and system permissions allow the script to invoke Unity and modify project files.
 
-Se hai una configurazione esistente con il vecchio formato (array di stringhe), lo script la convertirà automaticamente al nuovo formato con versioni:
+## Contributing
 
-```json
-// VECCHIO FORMATO
-"VpmPackages": ["com.vrchat.base", "com.vrchat.avatars"]
+Contributions are welcome. Open an issue or a pull request with a description of the change.
 
-// NUOVO FORMATO (conversione automatica)
-"VpmPackages": {
-    "com.vrchat.base": "latest",
-    "com.vrchat.avatars": "latest"
-}
-```
-
-## 📝 Changelog
-
-### v2.0 - 26/10/2025
-- ✨ Aggiunto supporto versioni configurabili per VPM packages
-- ✅ Validazione versioni tramite `vpm show package`
-- 🔄 Migrazione automatica dal vecchio formato array
-- 📋 Nuova opzione "Modifica versione package" nel wizard
-- 💾 Salvataggio versioni nella configurazione
-
-### v1.0
-- 🎉 Release iniziale
-- 📦 Supporto creazione progetti da UnityPackage
-- ⚙️ Setup VRChat su progetti esistenti
-- 🎮 Wizard interattivo
+## License
+See the `LICENSE` file in this folder for license details.
