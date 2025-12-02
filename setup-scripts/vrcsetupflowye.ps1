@@ -1,8 +1,11 @@
 # vrc-setup.ps1
-param([string]$projectPath)
+param([string]$projectPath, [switch]$Test)
 
 # === CARICAMENTO CONFIG ===
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+$logDir = Join-Path $scriptDir 'logs'
+if (-not (Test-Path $logDir)) { New-Item -Path $logDir -ItemType Directory -Force | Out-Null }
+$global:VRCSETUP_LOGFILE = Join-Path $logDir "vrcsetup-$(Get-Date -Format 'yyyyMMdd-HHmmss').log"
 $configPath = Join-Path $scriptDir "vrcsetup.config"
 
 # Check per reset config
@@ -172,7 +175,11 @@ function Install-NUnitPackage {
         }
         
         Write-Host "Aggiunta NUnit Test Framework (richiesto da VRChat SDK)..." -ForegroundColor Cyan
-        
+        if ($Test) {
+            Write-Host "[TEST] Would add com.unity.test-framework @ 1.1.33" -ForegroundColor DarkGray
+            Add-Content -Path $global:VRCSETUP_LOGFILE -Value "[TEST] Would add com.unity.test-framework @ 1.1.33 to $ProjectPath"
+            return
+        }
         # Aggiungi NUnit
         $manifest.dependencies | Add-Member -MemberType NoteProperty -Name "com.unity.test-framework" -Value "1.1.33" -Force
         
@@ -190,6 +197,7 @@ if (-not $projectPath) {
     Write-Host "Errore: devi specificare il path del progetto o un .unitypackage" -ForegroundColor Red
     Write-Host "Uso 1: vrc-setup `"C:\Path\To\Project`"" -ForegroundColor Yellow
     Write-Host "Uso 2: vrc-setup `"C:\Path\To\MyPackage.unitypackage`"" -ForegroundColor Yellow
+    Write-Host "Optional: append -Test to perform a dry-run: `vrc-setup path -Test`" -ForegroundColor Gray
     exit 1
 }
 
@@ -260,10 +268,17 @@ if ($projectPath -like "*.unitypackage") {
         Write-Host "Log: $logFile" -ForegroundColor Gray
         
         # Crea il progetto Unity in background per monitorare il progresso
-        $process = Start-Process -FilePath $UNITY_EDITOR_PATH `
-            -ArgumentList "-createProject `"$newProjectPath`" -quit -batchmode -logFile `"$logFile`"" `
-            -NoNewWindow -PassThru
+        if ($Test) {
+            Write-Host "[TEST] Would run Unity to create project: $newProjectPath" -ForegroundColor DarkGray
+            Write-Host "[TEST] Would create log: $logFile" -ForegroundColor DarkGray
+        } else {
+            $process = Start-Process -FilePath $UNITY_EDITOR_PATH `
+                -ArgumentList "-createProject `"$newProjectPath`" -quit -batchmode -logFile `"$logFile`"" `
+                -NoNewWindow -PassThru
+        }
     
+    if (-not $Test) {
+    if (-not $Test) {
     # Mostra progresso con stats in tempo reale (one-liner dinamico)
     $startTime = Get-Date
     $lastLog = ""
@@ -353,6 +368,11 @@ if ($projectPath -like "*.unitypackage") {
         exit 1
     }
     
+    }
+    else {
+        Write-Host "[TEST] Skipped Unity create checks and progress monitoring" -ForegroundColor DarkGray
+    }
+    
     Write-Host "Progetto creato!" -ForegroundColor Green
     } else {
         Write-Host "Progetto già esistente, skip creazione." -ForegroundColor Yellow
@@ -365,9 +385,14 @@ if ($projectPath -like "*.unitypackage") {
         
         $importLogFile = Join-Path $env:TEMP "unity-import-$(Get-Date -Format 'yyyyMMdd-HHmmss').log"
         
-        $importProcess = Start-Process -FilePath $UNITY_EDITOR_PATH `
-            -ArgumentList "-projectPath `"$newProjectPath`" -importPackage `"$projectPath`" -quit -batchmode -logFile `"$importLogFile`"" `
-            -NoNewWindow -PassThru
+        if ($Test) {
+            Write-Host "[TEST] Would start Unity to import package to project: $newProjectPath" -ForegroundColor DarkGray
+            Write-Host "[TEST] Would create log: $importLogFile" -ForegroundColor DarkGray
+        } else {
+            $importProcess = Start-Process -FilePath $UNITY_EDITOR_PATH `
+                -ArgumentList "-projectPath `"$newProjectPath`" -importPackage `"$projectPath`" -quit -batchmode -logFile `"$importLogFile`"" `
+                -NoNewWindow -PassThru
+        }
     
     # Mostra progresso con stats in tempo reale (one-liner dinamico)
     $startTime = Get-Date
@@ -444,12 +469,28 @@ if ($projectPath -like "*.unitypackage") {
         Write-Host "Unity exit code: $($importProcess.ExitCode) (errori di compilazione sono normali)" -ForegroundColor Yellow
     }
     
+    }
+    else {
+        Write-Host "[TEST] Skipped Unity import checks and progress monitoring" -ForegroundColor DarkGray
+    }
+
     Write-Host "Package importato!" -ForegroundColor Green
     } else {
         Write-Host "Skip import package (progetto già esistente)." -ForegroundColor Yellow
     }
     
     # Aggiungi NUnit Test Framework (richiesto da VRChat SDK)
+    $manifestPath = Join-Path $newProjectPath "Packages\manifest.json"
+    if ((Test-Path $manifestPath) -and (-not $manifestBackedUp)) {
+        try {
+            $backupPath = "$manifestPath.bak.$(Get-Date -Format 'yyyyMMdd-HHmmss')"
+            Copy-Item $manifestPath -Destination $backupPath -Force
+            Write-Host "Backup manifest created: $backupPath" -ForegroundColor Gray
+            $manifestBackedUp = $true
+        } catch {
+            Write-Host "Failed to create manifest backup: $_" -ForegroundColor Yellow
+        }
+    }
     Install-NUnitPackage -ProjectPath $newProjectPath
     
     # Ora usa il nuovo progetto per il resto dello script
@@ -470,27 +511,84 @@ if (-not ((Test-Path $assetsPath) -or (Test-Path $packagesPath))) {
 # Vai al progetto
 Push-Location $projectPath
 
+$manifestBackedUp = $false
+
 try {
     Write-Host "Installing VRC packages in: $projectPath" -ForegroundColor Green
+
+    # Backup manifest before changes (covers Install-NUnitPackage too)
+    $manifestPath = Join-Path $projectPath "Packages\manifest.json"
+    if ((Test-Path $manifestPath) -and (-not $manifestBackedUp)) {
+        try {
+            $backupPath = "$manifestPath.bak.$(Get-Date -Format 'yyyyMMdd-HHmmss')"
+            Copy-Item $manifestPath -Destination $backupPath -Force
+            Write-Host "Backup manifest created: $backupPath" -ForegroundColor Gray
+            $manifestBackedUp = $true
+        } catch {
+            Write-Host "Failed to create manifest backup: $_" -ForegroundColor Yellow
+        }
+    }
     
     # Aggiungi NUnit Test Framework se mancante
     Install-NUnitPackage -ProjectPath $projectPath
     
     # Installa VPM packages dalla configurazione
+    $manifestBackedUp = $false
     foreach ($pkg in $VPM_PACKAGES.PSObject.Properties) {
         $packageName = $pkg.Name
         $packageVersion = $pkg.Value
         
-        if ($packageVersion -eq "latest") {
-            Write-Host "Aggiunta package: $packageName (latest)" -ForegroundColor Cyan
-            vpm add package $packageName
-        } else {
-            Write-Host "Aggiunta package: $packageName @ $packageVersion" -ForegroundColor Cyan
-            vpm add package "$packageName@$packageVersion"
+        Write-Host "Processing package: $packageName : $packageVersion" -ForegroundColor Cyan
+        # Backup manifest before changes
+        $manifestPath = Join-Path $projectPath "Packages\manifest.json"
+        if ((Test-Path $manifestPath) -and (-not $manifestBackedUp)) {
+            try {
+                $backupPath = "$manifestPath.bak.$(Get-Date -Format 'yyyyMMdd-HHmmss')"
+                Copy-Item $manifestPath -Destination $backupPath -Force
+                Write-Host "Backup manifest created: $backupPath" -ForegroundColor Gray
+                $manifestBackedUp = $true
+            } catch {
+                Write-Host "Failed to create manifest backup: $_" -ForegroundColor Yellow
+            }
+        }
+
+        # Dry-run/Test mode support: only report actions
+        if ($Test) {
+            Write-Host "[TEST] Would add package: $packageName@$packageVersion" -ForegroundColor DarkGray
+            Add-Content -Path $global:VRCSETUP_LOGFILE -Value "[TEST] Would add package: $packageName@$packageVersion"
+            continue
+        }
+
+        # Execute vpm add and log the output
+        try {
+            if ($packageVersion -eq "latest") {
+                Write-Host "Adding package: $packageName (latest)" -ForegroundColor Cyan
+                vpm add package $packageName 2>&1 | Tee-Object -FilePath $global:VRCSETUP_LOGFILE -Append
+            } else {
+                Write-Host "Adding package: $packageName @ $packageVersion" -ForegroundColor Cyan
+                vpm add package "$packageName@$packageVersion" 2>&1 | Tee-Object -FilePath $global:VRCSETUP_LOGFILE -Append
+            }
+            if ($LASTEXITCODE -ne 0) { Write-Host "vpm reported exit code $LASTEXITCODE for $packageName" -ForegroundColor Yellow }
+        } catch {
+            Write-Host "Failed to add $packageName: $_" -ForegroundColor Red
+            Add-Content -Path $global:VRCSETUP_LOGFILE -Value "ERROR: Failed to add $packageName : $_"
         }
     }
     
-    vpm resolve project $projectPath
+    # Ensure manifest path is available for lockfile snapshot
+    $manifestPath = Join-Path $projectPath "Packages\manifest.json"
+    vpm resolve project $projectPath 2>&1 | Tee-Object -FilePath $global:VRCSETUP_LOGFILE -Append
+
+    # Save a lightweight lock snapshot of the resulting manifest
+    if (-not $Test) {
+        $resolvedManifestPath = Join-Path $scriptDir "vrcsetup.lock.json"
+        if (Test-Path $manifestPath) {
+            Copy-Item $manifestPath -Destination $resolvedManifestPath -Force
+            Write-Host "Saved lock manifest: $resolvedManifestPath" -ForegroundColor Gray
+        }
+    } else {
+        Write-Host "[TEST] Skipped saving lock manifest (test mode)" -ForegroundColor DarkGray
+    }
     
     Write-Host "`nSetup complete!" -ForegroundColor Green
 } catch {

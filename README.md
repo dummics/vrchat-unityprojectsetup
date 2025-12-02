@@ -89,6 +89,21 @@ Older config files that used a simple array of package names are migrated automa
 - The script integrates with Unity via the editor path configured in the `vrcsetup.config` file.
 - Ensure PowerShell execution policies and system permissions allow the script to invoke Unity and modify project files.
 
+### 🔍 Test mode, backups & lockfile snapshot
+
+- `-Test` (dry-run): Run the script with `-Test` to print actions that would be performed without modifying the project or adding packages. Example:
+```powershell
+.\setup-scripts\vrcsetupflowye.ps1 "C:\Path\To\Project" -Test
+```
+- Backup: Before applying changes to `Packages/manifest.json`, the script creates a timestamped backup (`manifest.json.bak.YYYYMMDD-HHmmss`) in the same folder. If a change breaks the project, restore the original with:
+```powershell
+Copy-Item "<Project>\Packages\manifest.json.bak.YYYYMMDD-HHmmss" "<Project>\Packages\manifest.json" -Force
+```
+- Lockfile snapshot: After a successful `vpm resolve`, the script saves a snapshot of the resolved `manifest.json` to `setup-scripts\vrcsetup.lock.json` in the script folder. This is a quick reproducibility aid, allowing you to reapply the exact resolved manifest later.
+- Logs: the script writes `vpm` and execution logs to `setup-scripts/logs/` as `vrcsetup-YYYYMMDD-HHmmss.log`.
+
+These features provide safe rollback paths and a reproducible snapshot without forcing any particular version policy. Keep in mind: we don't change versions automatically; pinning/upgrade decisions are still yours to set in `vrcsetup.config`.
+
 ## Contributing
 
 Contributions are welcome. Open an issue or a pull request with a description of the change.
