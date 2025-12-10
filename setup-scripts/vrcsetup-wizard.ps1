@@ -263,147 +263,177 @@ while ($true) {
             
             $exitVpmMenu = $false
             while (-not $exitVpmMenu) {
-                Clear-Host
-                Write-Host "`n--- Configurazione VPM Packages ---" -ForegroundColor Cyan
-                Write-Host "Packages attualmente configurati:" -ForegroundColor Yellow
-                
-                $i = 0
-                $packagesList = @()
-                foreach ($pkg in $config.VpmPackages.PSObject.Properties) {
-                    $i++
-                    $packagesList += $pkg
-                    Write-Host "  $i) $($pkg.Name) @ $($pkg.Value)" -ForegroundColor White
+                $packagesList = @($config.VpmPackages.PSObject.Properties)
+                $options = @(
+                    "A) Aggiungi package",
+                    "M) Modifica versione package",
+                    "R) Rimuovi package",
+                    "S) Salva e torna al menu"
+                )
+                $currentOption = 0
+
+                # --- Selezione menu principale VPM ---
+                while ($true) {
+                    Clear-Host
+                    Write-Host "`n--- Configurazione VPM Packages ---" -ForegroundColor Cyan
+                    Write-Host "Packages attualmente configurati:" -ForegroundColor Yellow
+
+                    $packagesList = @($config.VpmPackages.PSObject.Properties)
+                    $idx = 0
+                    foreach ($pkg in $packagesList) {
+                        $idx++
+                        Write-Host ("  {0}) {1} - {2}" -f $idx, $pkg.Name, $pkg.Value) -ForegroundColor White
+                    }
+
+                    Write-Host "`nOpzioni:" -ForegroundColor Yellow
+                    Write-Host "Usa frecce su/giu per selezionare, INVIO per confermare, ESC per annullare" -ForegroundColor Gray
+
+                    for ($opt = 0; $opt -lt $options.Count; $opt++) {
+                        if ($opt -eq $currentOption) {
+                            Write-Host " > $($options[$opt])" -ForegroundColor Yellow -BackgroundColor DarkGray
+                        } else {
+                            Write-Host "   $($options[$opt])" -ForegroundColor White
+                        }
+                    }
+
+                    $key = [Console]::ReadKey($true)
+                    switch ($key.Key) {
+                        UpArrow { if ($currentOption -gt 0) { $currentOption-- } }
+                        DownArrow { if ($currentOption -lt ($options.Count - 1)) { $currentOption++ } }
+                        Enter { break }
+                        Escape { $currentOption = -1; break }
+                        default { }
+                    }
                 }
-                
-                Write-Host "`nOpzioni:" -ForegroundColor Yellow
-                Write-Host "  A) Aggiungi package" -ForegroundColor White
-                Write-Host "  E) Modifica versione package" -ForegroundColor White
-                Write-Host "  R) Rimuovi package" -ForegroundColor White
-                Write-Host "  S) Salva e torna al menu" -ForegroundColor White
-                Write-Host ""
-                
-                $vpmChoice = Read-Host "Scelta [A/E/R/S]"
-                
-                # Gestisci input vuoto
-                if ([string]::IsNullOrWhiteSpace($vpmChoice)) {
-                    Write-Host "Input vuoto, riprova!" -ForegroundColor Red
+
+                if ($currentOption -eq -1) {
+                    Write-Host "`nOperazione annullata." -ForegroundColor Yellow
                     Start-Sleep -Seconds 1
                     continue
                 }
-                
-                switch ($vpmChoice.ToUpper().Trim()) {
+
+                $vpmChoice = @("A", "M", "R", "S")[$currentOption]
+
+                switch ($vpmChoice) {
                     "A" {
                         Write-Host "`nInserisci il nome del package VPM da aggiungere:" -ForegroundColor Yellow
                         Write-Host "(es. com.vrchat.avatars oppure gogoloco per package semplici)" -ForegroundColor Gray
                         $newPackage = Read-Host "Nome package"
-                        
-                        if ([string]::IsNullOrWhiteSpace($newPackage)) {
-                            Write-Host "Nome package vuoto, operazione annullata." -ForegroundColor Yellow
-                            continue
-                        }
-                        
-                        if ($config.VpmPackages.PSObject.Properties.Name -contains $newPackage) {
-                            Write-Host "Package già presente nella lista!" -ForegroundColor Yellow
-                            continue
-                        }
-                        
+
+                        if ([string]::IsNullOrWhiteSpace($newPackage)) { Write-Host "Nome package vuoto, operazione annullata." -ForegroundColor Yellow; continue }
+                        if ($config.VpmPackages.PSObject.Properties.Name -contains $newPackage) { Write-Host "Package già presente nella lista!" -ForegroundColor Yellow; continue }
+
                         Write-Host "`nInserisci la versione (o 'latest' per l'ultima disponibile):" -ForegroundColor Yellow
                         Write-Host "Esempi: 3.5.0, 1.0.0, latest" -ForegroundColor Gray
                         $newVersion = Read-Host "Versione"
-                        
-                        if ([string]::IsNullOrWhiteSpace($newVersion)) {
-                            $newVersion = "latest"
-                            Write-Host "Nessuna versione specificata, uso 'latest'" -ForegroundColor Gray
-                        }
-                        
-                        # Valida la versione
+                        if ([string]::IsNullOrWhiteSpace($newVersion)) { $newVersion = "latest"; Write-Host "Nessuna versione specificata, uso 'latest'" -ForegroundColor Gray }
+
                         $validation = Test-VpmPackageVersion -PackageName $newPackage -Version $newVersion -ScriptDir $scriptDir
                         if ($validation.Valid) {
                             $config.VpmPackages | Add-Member -MemberType NoteProperty -Name $newPackage -Value $newVersion -Force
-                            Write-Host "Package aggiunto: $newPackage @ $newVersion" -ForegroundColor Green
+                            Write-Host "Package aggiunto: $newPackage - $newVersion" -ForegroundColor Green
                             Write-Host "($($validation.Message))" -ForegroundColor Gray
                         } else {
                             Write-Host "Errore: $($validation.Message)" -ForegroundColor Red
                             Write-Host "Package non aggiunto." -ForegroundColor Yellow
                         }
                     }
-                    
-                    "E" {
-                        if ($packagesList.Count -eq 0) {
-                            Write-Host "`nNessun package da modificare!" -ForegroundColor Yellow
-                            continue
-                        }
-                        
-                        Write-Host "`nInserisci il numero del package da modificare:" -ForegroundColor Yellow
-                        $modifyIdx = Read-Host "Numero"
-                        
-                        if ([string]::IsNullOrWhiteSpace($modifyIdx)) {
-                            Write-Host "Operazione annullata." -ForegroundColor Yellow
-                            continue
-                        }
-                        
-                        try {
-                            $idx = [int]$modifyIdx - 1
-                            if ($idx -ge 0 -and $idx -lt $packagesList.Count) {
-                                $pkgToModify = $packagesList[$idx]
-                                Write-Host "`nPackage selezionato: $($pkgToModify.Name) (versione attuale: $($pkgToModify.Value))" -ForegroundColor Cyan
-                                Write-Host "Inserisci la nuova versione (o 'latest'):" -ForegroundColor Yellow
-                                Write-Host "Premi INVIO per annullare" -ForegroundColor Gray
-                                $newVersion = Read-Host "Nuova versione"
-                                
-                                if ([string]::IsNullOrWhiteSpace($newVersion)) {
-                                    Write-Host "Operazione annullata." -ForegroundColor Yellow
-                                    continue
-                                }
-                                
-                                # Valida la versione
-                                $validation = Test-VpmPackageVersion -PackageName $pkgToModify.Name -Version $newVersion -ScriptDir $scriptDir
-                                if ($validation.Valid) {
-                                    $config.VpmPackages.($pkgToModify.Name) = $newVersion
-                                    Write-Host "Versione aggiornata: $($pkgToModify.Name) @ $newVersion" -ForegroundColor Green
-                                    Write-Host "($($validation.Message))" -ForegroundColor Gray
+
+                    "M" {
+                        $packagesList = @($config.VpmPackages.PSObject.Properties)
+                        if ($packagesList.Count -eq 0) { Write-Host "`nNessun package da modificare!" -ForegroundColor Yellow; continue }
+
+                        $currentPkg = 0
+                        while ($true) {
+                            Clear-Host
+                            Write-Host "`n--- Configurazione VPM Packages ---" -ForegroundColor Cyan
+                            Write-Host "Packages attualmente configurati:" -ForegroundColor Yellow
+                            $idx = 0
+                            foreach ($pkg in $packagesList) {
+                                $idx++
+                                Write-Host ("  {0}) {1} - {2}" -f $idx, $pkg.Name, $pkg.Value) -ForegroundColor White
+                            }
+                            Write-Host "`nSeleziona il package da modificare:" -ForegroundColor Yellow
+                            Write-Host "Usa frecce su/giu per selezionare, INVIO per confermare, ESC per annullare" -ForegroundColor Gray
+                            for ($pidx = 0; $pidx -lt $packagesList.Count; $pidx++) {
+                                $pkg = $packagesList[$pidx]
+                                if ($pidx -eq $currentPkg) {
+                                    Write-Host (" > {0} {1} - {2}" -f ($pidx + 1), $pkg.Name, $pkg.Value) -ForegroundColor Yellow -BackgroundColor DarkGray
                                 } else {
-                                    Write-Host "Errore: $($validation.Message)" -ForegroundColor Red
-                                    Write-Host "Modifica annullata." -ForegroundColor Yellow
+                                    Write-Host ("   {0} {1} - {2}" -f ($pidx + 1), $pkg.Name, $pkg.Value) -ForegroundColor White
                                 }
-                            } else {
-                                Write-Host "Numero non valido! Scegli tra 1 e $($packagesList.Count)" -ForegroundColor Red
                             }
-                        } catch {
-                            Write-Host "Input non valido! Inserisci un numero." -ForegroundColor Red
+                            $key = [Console]::ReadKey($true)
+                            switch ($key.Key) {
+                                UpArrow { if ($currentPkg -gt 0) { $currentPkg-- } }
+                                DownArrow { if ($currentPkg -lt ($packagesList.Count - 1)) { $currentPkg++ } }
+                                Enter { break }
+                                Escape { $currentPkg = -1; break }
+                                default { }
+                            }
+                        }
+
+                        if ($currentPkg -eq -1) { Write-Host "`nOperazione annullata." -ForegroundColor Yellow; Start-Sleep -Seconds 1; continue }
+
+                        $pkgToModify = $packagesList[$currentPkg]
+                        Write-Host "`nPackage selezionato: $($pkgToModify.Name) (versione attuale: $($pkgToModify.Value))" -ForegroundColor Cyan
+                        Write-Host "Premi INVIO per annullare" -ForegroundColor Gray
+                        $newVersion = Read-Host "Nuova versione"
+                        if ([string]::IsNullOrWhiteSpace($newVersion)) { Write-Host "Operazione annullata." -ForegroundColor Yellow; continue }
+
+                        $validation = Test-VpmPackageVersion -PackageName $pkgToModify.Name -Version $newVersion -ScriptDir $scriptDir
+                        if ($validation.Valid) {
+                            $config.VpmPackages.($pkgToModify.Name) = $newVersion
+                            Write-Host "Versione aggiornata: $($pkgToModify.Name) - $newVersion" -ForegroundColor Green
+                            Write-Host "($($validation.Message))" -ForegroundColor Gray
+                        } else {
+                            Write-Host "Errore: $($validation.Message)" -ForegroundColor Red
+                            Write-Host "Modifica annullata." -ForegroundColor Yellow
                         }
                     }
-                    
+
                     "R" {
-                        if ($packagesList.Count -eq 0) {
-                            Write-Host "`nNessun package da rimuovere!" -ForegroundColor Yellow
-                            continue
-                        }
-                        
-                        Write-Host "`nInserisci il numero del package da rimuovere:" -ForegroundColor Yellow
-                        $removeIdx = Read-Host "Numero"
-                        
-                        if ([string]::IsNullOrWhiteSpace($removeIdx)) {
-                            Write-Host "Operazione annullata." -ForegroundColor Yellow
-                            continue
-                        }
-                        
-                        try {
-                            $idx = [int]$removeIdx - 1
-                            if ($idx -ge 0 -and $idx -lt $packagesList.Count) {
-                                $removed = $packagesList[$idx]
-                                $config.VpmPackages.PSObject.Properties.Remove($removed.Name)
-                                Write-Host "Package rimosso: $($removed.Name)" -ForegroundColor Green
-                            } else {
-                                Write-Host "Numero non valido! Scegli tra 1 e $($packagesList.Count)" -ForegroundColor Red
+                        $packagesList = @($config.VpmPackages.PSObject.Properties)
+                        if ($packagesList.Count -eq 0) { Write-Host "`nNessun package da rimuovere!" -ForegroundColor Yellow; continue }
+
+                        $currentPkgRemove = 0
+                        while ($true) {
+                            Clear-Host
+                            Write-Host "`n--- Configurazione VPM Packages ---" -ForegroundColor Cyan
+                            Write-Host "Packages attualmente configurati:" -ForegroundColor Yellow
+                            $idx = 0
+                            foreach ($pkg in $packagesList) {
+                                $idx++
+                                Write-Host ("  {0}) {1} - {2}" -f $idx, $pkg.Name, $pkg.Value) -ForegroundColor White
                             }
-                        } catch {
-                            Write-Host "Input non valido! Inserisci un numero." -ForegroundColor Red
+                            Write-Host "`nSeleziona il package da rimuovere:" -ForegroundColor Yellow
+                            Write-Host "Usa frecce su/giu per selezionare, INVIO per confermare, ESC per annullare" -ForegroundColor Gray
+                            for ($pidx = 0; $pidx -lt $packagesList.Count; $pidx++) {
+                                $pkg = $packagesList[$pidx]
+                                if ($pidx -eq $currentPkgRemove) {
+                                    Write-Host (" > {0} {1} - {2}" -f ($pidx + 1), $pkg.Name, $pkg.Value) -ForegroundColor Yellow -BackgroundColor DarkGray
+                                } else {
+                                    Write-Host ("   {0} {1} - {2}" -f ($pidx + 1), $pkg.Name, $pkg.Value) -ForegroundColor White
+                                }
+                            }
+                            $key = [Console]::ReadKey($true)
+                            switch ($key.Key) {
+                                UpArrow { if ($currentPkgRemove -gt 0) { $currentPkgRemove-- } }
+                                DownArrow { if ($currentPkgRemove -lt ($packagesList.Count - 1)) { $currentPkgRemove++ } }
+                                Enter { break }
+                                Escape { $currentPkgRemove = -1; break }
+                                default { }
+                            }
                         }
+
+                        if ($currentPkgRemove -eq -1) { Write-Host "`nOperazione annullata." -ForegroundColor Yellow; Start-Sleep -Seconds 1; continue }
+
+                        $removed = $packagesList[$currentPkgRemove]
+                        $config.VpmPackages.PSObject.Properties.Remove($removed.Name)
+                        Write-Host "Package rimosso: $($removed.Name)" -ForegroundColor Green
                     }
-                    
+
                     "S" {
-                        # Salva configurazione
                         $configData = @{
                             UnityProjectsRoot = $config.UnityProjectsRoot
                             UnityEditorPath = $config.UnityEditorPath
@@ -414,13 +444,13 @@ while ($true) {
                         Start-Sleep -Seconds 1
                         $exitVpmMenu = $true
                     }
-                    
+
                     default {
-                        Write-Host "Scelta non valida! Usa A, E, R o S." -ForegroundColor Red
+                        Write-Host "Scelta non valida! Usa A, M, R o S." -ForegroundColor Red
                     }
                 }
             }
-            
+
             Read-Host "`nPremi INVIO per tornare al menu principale"
             Clear-Host
         }

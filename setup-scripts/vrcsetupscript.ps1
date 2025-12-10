@@ -276,103 +276,100 @@ if ($projectPath -like "*.unitypackage") {
                 -ArgumentList "-createProject `"$newProjectPath`" -quit -batchmode -logFile `"$logFile`"" `
                 -NoNewWindow -PassThru
         }
-    
-    if (-not $Test) {
-    # Mostra progresso con stats in tempo reale (one-liner dinamico)
-    $startTime = Get-Date
-    $lastLog = ""
-    $lastStatsUpdate = Get-Date
-    $cpuPercent = 0
-    $memoryMB = 0
-    
-    # Salva posizione cursore iniziale
-    $cursorTop = [Console]::CursorTop
-    
-    #logs write speed
-    while (-not $process.HasExited) {
-        Start-Sleep -Milliseconds 50
         
-        # Calcola elapsed time
-        $elapsed = (Get-Date) - $startTime
-        $elapsedStr = "{0:mm}:{0:ss}" -f $elapsed
-        
-        # Get Unity process stats (solo ogni secondo per non sovraccaricare)
-        if ((Get-Date) - $lastStatsUpdate -gt [TimeSpan]::FromSeconds(1)) {
-            try {
-                $unityProc = Get-Process -Id $process.Id -ErrorAction SilentlyContinue
-                if ($unityProc) {
-                    $cpuPercent = [math]::Round($unityProc.CPU / $elapsed.TotalSeconds, 1)
-                    $memoryMB = [math]::Round($unityProc.WorkingSet64 / 1MB, 0)
-                }
-            } catch { }
+        if (-not $Test) {
+            # Mostra progresso con stats in tempo reale (one-liner dinamico)
+            $startTime = Get-Date
+            $lastLog = ""
             $lastStatsUpdate = Get-Date
-        }
-        
-        # Leggi log SEMPRE per vedere aggiornamenti real-time
-        if (Test-Path $logFile) {
-            $newLog = Get-Content $logFile -Tail 1 -ErrorAction SilentlyContinue
-            if ($newLog -and $newLog -ne $lastLog) {
-                $lastLog = $newLog
-            }
-        }
-        
-        # Tronca il log dinamicamente in base alla larghezza finestra
-        $maxLogLen = [Math]::Max(40, [Console]::WindowWidth - 50)
-        $displayLog = if ($lastLog.Length -gt $maxLogLen) { 
-            $lastLog.Substring(0, $maxLogLen) + "..." 
-        } else { 
-            $lastLog 
-        }
-        
-        # Costruisci la stringa completa con padding
-        $statusLine = "[Unity] $elapsedStr | CPU: $cpuPercent% | RAM: $($memoryMB)MB | $displayLog"
-        $fullWidth = [Console]::WindowWidth - 1
-        if ($statusLine.Length -gt $fullWidth) {
-            $statusLine = $statusLine.Substring(0, $fullWidth)
-        } else {
-            $statusLine = $statusLine.PadRight($fullWidth)
-        }
-        
-        # Riposiziona cursore e scrivi (evita newline)
-        try {
-            [Console]::SetCursorPosition(0, $cursorTop)
-            [Console]::Write($statusLine)
-        } catch {
-            # Fallback se il cursore non è posizionabile (es. resize)
+            $cpuPercent = 0
+            $memoryMB = 0
+            
+            # Salva posizione cursore iniziale
             $cursorTop = [Console]::CursorTop
+            
+            while (-not $process.HasExited) {
+                Start-Sleep -Milliseconds 50
+                
+                # Calcola elapsed time
+                $elapsed = (Get-Date) - $startTime
+                $elapsedStr = "{0:mm}:{0:ss}" -f $elapsed
+                
+                # Get Unity process stats (solo ogni secondo per non sovraccaricare)
+                if ((Get-Date) - $lastStatsUpdate -gt [TimeSpan]::FromSeconds(1)) {
+                    try {
+                        $unityProc = Get-Process -Id $process.Id -ErrorAction SilentlyContinue
+                        if ($unityProc) {
+                            $cpuPercent = [math]::Round($unityProc.CPU / $elapsed.TotalSeconds, 1)
+                            $memoryMB = [math]::Round($unityProc.WorkingSet64 / 1MB, 0)
+                        }
+                    } catch { }
+                    $lastStatsUpdate = Get-Date
+                }
+                
+                # Leggi log SEMPRE per vedere aggiornamenti real-time
+                if (Test-Path $logFile) {
+                    $newLog = Get-Content $logFile -Tail 1 -ErrorAction SilentlyContinue
+                    if ($newLog -and $newLog -ne $lastLog) {
+                        $lastLog = $newLog
+                    }
+                }
+                
+                # Tronca il log dinamicamente in base alla larghezza finestra
+                $maxLogLen = [Math]::Max(40, [Console]::WindowWidth - 50)
+                $displayLog = if ($lastLog.Length -gt $maxLogLen) { 
+                    $lastLog.Substring(0, $maxLogLen) + "..." 
+                } else { 
+                    $lastLog 
+                }
+                
+                # Costruisci la stringa completa con padding
+                $statusLine = "[Unity] $elapsedStr | CPU: $cpuPercent% | RAM: $($memoryMB)MB | $displayLog"
+                $fullWidth = [Console]::WindowWidth - 1
+                if ($statusLine.Length -gt $fullWidth) {
+                    $statusLine = $statusLine.Substring(0, $fullWidth)
+                } else {
+                    $statusLine = $statusLine.PadRight($fullWidth)
+                }
+                
+                # Riposiziona cursore e scrivi (evita newline)
+                try {
+                    [Console]::SetCursorPosition(0, $cursorTop)
+                    [Console]::Write($statusLine)
+                } catch {
+                    # Fallback se il cursore non è posizionabile (es. resize)
+                    $cursorTop = [Console]::CursorTop
+                }
+            }
+            
+            # Scrivi messaggio finale
+            [Console]::SetCursorPosition(0, $cursorTop)
+            $finalMsg = "[Unity] Completato! Tempo: $elapsedStr"
+            Write-Host $finalMsg.PadRight([Console]::WindowWidth - 1) -ForegroundColor Green
+            
+            # Unity può uscire con exit code != 0 anche per warning o errori di compilazione
+            # Verifichiamo invece che la cartella sia stata creata correttamente
+            if ($process.ExitCode -ne 0) {
+                Write-Host "Unity exit code: $($process.ExitCode) (potrebbe essere normale)" -ForegroundColor Yellow
+            }
+            
+            # Check reale: verifica che Assets esista
+            if (-not (Test-Path (Join-Path $newProjectPath "Assets"))) {
+                Write-Host "Errore: progetto non creato correttamente" -ForegroundColor Red
+                if (Test-Path $logFile) {
+                    Write-Host "`nUltime righe del log:" -ForegroundColor Yellow
+                    Get-Content $logFile -Tail 20
+                }
+                # Cleanup
+                Write-Host "Pulizia cartella progetto fallito..." -ForegroundColor Yellow
+                Remove-Item -Path $newProjectPath -Recurse -Force -ErrorAction SilentlyContinue
+                exit 1
+            }
+        } else {
+            Write-Host "[TEST] Skipped Unity create checks and progress monitoring" -ForegroundColor DarkGray
         }
-    }
-    
-    # Scrivi messaggio finale
-    [Console]::SetCursorPosition(0, $cursorTop)
-    $finalMsg = "[Unity] Completato! Tempo: $elapsedStr"
-    Write-Host $finalMsg.PadRight([Console]::WindowWidth - 1) -ForegroundColor Green
-    
-    # Unity può uscire con exit code != 0 anche per warning o errori di compilazione
-    # Verifichiamo invece che la cartella sia stata creata correttamente
-    if ($process.ExitCode -ne 0) {
-        Write-Host "Unity exit code: $($process.ExitCode) (potrebbe essere normale)" -ForegroundColor Yellow
-    }
-    
-    # Check reale: verifica che Assets esista
-    if (-not (Test-Path (Join-Path $newProjectPath "Assets"))) {
-        Write-Host "Errore: progetto non creato correttamente" -ForegroundColor Red
-        if (Test-Path $logFile) {
-            Write-Host "`nUltime righe del log:" -ForegroundColor Yellow
-            Get-Content $logFile -Tail 20
-        }
-        # Cleanup
-        Write-Host "Pulizia cartella progetto fallito..." -ForegroundColor Yellow
-        Remove-Item -Path $newProjectPath -Recurse -Force -ErrorAction SilentlyContinue
-        exit 1
-    }
-    
-    }
-    else {
-        Write-Host "[TEST] Skipped Unity create checks and progress monitoring" -ForegroundColor DarkGray
-    }
-    
-    Write-Host "Progetto creato!" -ForegroundColor Green
+        
+        Write-Host "Progetto creato!" -ForegroundColor Green
     } else {
         Write-Host "Progetto già esistente, skip creazione." -ForegroundColor Yellow
     }
@@ -392,88 +389,87 @@ if ($projectPath -like "*.unitypackage") {
                 -ArgumentList "-projectPath `"$newProjectPath`" -importPackage `"$projectPath`" -quit -batchmode -logFile `"$importLogFile`"" `
                 -NoNewWindow -PassThru
         }
-    
-    # Mostra progresso con stats in tempo reale (one-liner dinamico)
-    $startTime = Get-Date
-    $lastLog = ""
-    $lastStatsUpdate = Get-Date
-    $cpuPercent = 0
-    $memoryMB = 0
-    
-    # Salva posizione cursore iniziale
-    $cursorTop = [Console]::CursorTop
-    
-    while (-not $importProcess.HasExited) {
-        Start-Sleep -Milliseconds 50
         
-        # Calcola elapsed time
-        $elapsed = (Get-Date) - $startTime
-        $elapsedStr = "{0:mm}:{0:ss}" -f $elapsed
-        
-        # Get Unity process stats (solo ogni secondo)
-        if ((Get-Date) - $lastStatsUpdate -gt [TimeSpan]::FromSeconds(1)) {
-            try {
-                $unityProc = Get-Process -Id $importProcess.Id -ErrorAction SilentlyContinue
-                if ($unityProc) {
-                    $cpuPercent = [math]::Round($unityProc.CPU / $elapsed.TotalSeconds, 1)
-                    $memoryMB = [math]::Round($unityProc.WorkingSet64 / 1MB, 0)
-                }
-            } catch { }
+        if (-not $Test) {
+            # Mostra progresso con stats in tempo reale (one-liner dinamico)
+            $startTime = Get-Date
+            $lastLog = ""
             $lastStatsUpdate = Get-Date
-        }
-        
-        # Leggi log SEMPRE per vedere aggiornamenti real-time
-        if (Test-Path $importLogFile) {
-            $newLog = Get-Content $importLogFile -Tail 1 -ErrorAction SilentlyContinue
-            if ($newLog -and $newLog -ne $lastLog) {
-                $lastLog = $newLog
-            }
-        }
-        
-        # Tronca il log dinamicamente in base alla larghezza finestra
-        $maxLogLen = [Math]::Max(40, [Console]::WindowWidth - 50)
-        $displayLog = if ($lastLog.Length -gt $maxLogLen) { 
-            $lastLog.Substring(0, $maxLogLen) + "..." 
-        } else { 
-            $lastLog 
-        }
-        
-        # Costruisci la stringa completa con padding
-        $statusLine = "[Import] $elapsedStr | CPU: $cpuPercent% | RAM: $($memoryMB)MB | $displayLog"
-        $fullWidth = [Console]::WindowWidth - 1
-        if ($statusLine.Length -gt $fullWidth) {
-            $statusLine = $statusLine.Substring(0, $fullWidth)
-        } else {
-            $statusLine = $statusLine.PadRight($fullWidth)
-        }
-        
-        # Riposiziona cursore e scrivi (evita newline)
-        try {
-            [Console]::SetCursorPosition(0, $cursorTop)
-            [Console]::Write($statusLine)
-        } catch {
-            # Fallback se il cursore non è posizionabile (es. resize)
+            $cpuPercent = 0
+            $memoryMB = 0
+            
+            # Salva posizione cursore iniziale
             $cursorTop = [Console]::CursorTop
+            
+            while (-not $importProcess.HasExited) {
+                Start-Sleep -Milliseconds 50
+                
+                # Calcola elapsed time
+                $elapsed = (Get-Date) - $startTime
+                $elapsedStr = "{0:mm}:{0:ss}" -f $elapsed
+                
+                # Get Unity process stats (solo ogni secondo)
+                if ((Get-Date) - $lastStatsUpdate -gt [TimeSpan]::FromSeconds(1)) {
+                    try {
+                        $unityProc = Get-Process -Id $importProcess.Id -ErrorAction SilentlyContinue
+                        if ($unityProc) {
+                            $cpuPercent = [math]::Round($unityProc.CPU / $elapsed.TotalSeconds, 1)
+                            $memoryMB = [math]::Round($unityProc.WorkingSet64 / 1MB, 0)
+                        }
+                    } catch { }
+                    $lastStatsUpdate = Get-Date
+                }
+                
+                # Leggi log SEMPRE per vedere aggiornamenti real-time
+                if (Test-Path $importLogFile) {
+                    $newLog = Get-Content $importLogFile -Tail 1 -ErrorAction SilentlyContinue
+                    if ($newLog -and $newLog -ne $lastLog) {
+                        $lastLog = $newLog
+                    }
+                }
+                
+                # Tronca il log dinamicamente in base alla larghezza finestra
+                $maxLogLen = [Math]::Max(40, [Console]::WindowWidth - 50)
+                $displayLog = if ($lastLog.Length -gt $maxLogLen) { 
+                    $lastLog.Substring(0, $maxLogLen) + "..." 
+                } else { 
+                    $lastLog 
+                }
+                
+                # Costruisci la stringa completa con padding
+                $statusLine = "[Import] $elapsedStr | CPU: $cpuPercent% | RAM: $($memoryMB)MB | $displayLog"
+                $fullWidth = [Console]::WindowWidth - 1
+                if ($statusLine.Length -gt $fullWidth) {
+                    $statusLine = $statusLine.Substring(0, $fullWidth)
+                } else {
+                    $statusLine = $statusLine.PadRight($fullWidth)
+                }
+                
+                # Riposiziona cursore e scrivi (evita newline)
+                try {
+                    [Console]::SetCursorPosition(0, $cursorTop)
+                    [Console]::Write($statusLine)
+                } catch {
+                    # Fallback se il cursore non è posizionabile (es. resize)
+                    $cursorTop = [Console]::CursorTop
+                }
+            }
+            
+            # Scrivi messaggio finale
+            [Console]::SetCursorPosition(0, $cursorTop)
+            $finalMsg = "[Import] Completato! Tempo: $elapsedStr"
+            Write-Host $finalMsg.PadRight([Console]::WindowWidth - 1) -ForegroundColor Green
+            
+            # Gli errori di compilazione sono normali quando si importano package
+            # Verifichiamo solo che il processo sia terminato correttamente
+            if ($importProcess.ExitCode -ne 0) {
+                Write-Host "Unity exit code: $($importProcess.ExitCode) (errori di compilazione sono normali)" -ForegroundColor Yellow
+            }
+        } else {
+            Write-Host "[TEST] Skipped Unity import checks and progress monitoring" -ForegroundColor DarkGray
         }
-    }
-    
-    # Scrivi messaggio finale
-    [Console]::SetCursorPosition(0, $cursorTop)
-    $finalMsg = "[Import] Completato! Tempo: $elapsedStr"
-    Write-Host $finalMsg.PadRight([Console]::WindowWidth - 1) -ForegroundColor Green
-    
-    # Gli errori di compilazione sono normali quando si importano package
-    # Verifichiamo solo che il processo sia terminato correttamente
-    if ($importProcess.ExitCode -ne 0) {
-        Write-Host "Unity exit code: $($importProcess.ExitCode) (errori di compilazione sono normali)" -ForegroundColor Yellow
-    }
-    
-    }
-    else {
-        Write-Host "[TEST] Skipped Unity import checks and progress monitoring" -ForegroundColor DarkGray
-    }
 
-    Write-Host "Package importato!" -ForegroundColor Green
+        Write-Host "Package importato!" -ForegroundColor Green
     } else {
         Write-Host "Skip import package (progetto già esistente)." -ForegroundColor Yellow
     }
