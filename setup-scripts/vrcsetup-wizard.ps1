@@ -109,7 +109,7 @@ function Test-VpmPackageVersion {
 
 # === CARICAMENTO CONFIG ===
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
-$vrcsetupScript = Join-Path $scriptDir "vrcsetupflowye.ps1"
+$vrcsetupScript = Join-Path $scriptDir "vrcsetupscript.ps1"
 
 # Header
 Write-Host "`n================================" -ForegroundColor Cyan
