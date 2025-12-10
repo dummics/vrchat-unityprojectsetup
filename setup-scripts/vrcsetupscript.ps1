@@ -278,7 +278,6 @@ if ($projectPath -like "*.unitypackage") {
         }
     
     if (-not $Test) {
-    if (-not $Test) {
     # Mostra progresso con stats in tempo reale (one-liner dinamico)
     $startTime = Get-Date
     $lastLog = ""

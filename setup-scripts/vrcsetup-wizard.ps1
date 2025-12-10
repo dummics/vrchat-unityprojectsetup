@@ -125,6 +125,7 @@ if (-not (Test-Path $vrcsetupScript)) {
 
 # Menu principale
 while ($true) {
+    Clear-Host
     Write-Host "`nCosa vuoi fare?" -ForegroundColor Yellow
     Write-Host "  1) Creare nuovo progetto da UnityPackage" -ForegroundColor White
     Write-Host "  2) Setup VRChat su progetto esistente" -ForegroundColor White
@@ -262,6 +263,7 @@ while ($true) {
             
             $exitVpmMenu = $false
             while (-not $exitVpmMenu) {
+                Clear-Host
                 Write-Host "`n--- Configurazione VPM Packages ---" -ForegroundColor Cyan
                 Write-Host "Packages attualmente configurati:" -ForegroundColor Yellow
                 
@@ -285,6 +287,7 @@ while ($true) {
                 # Gestisci input vuoto
                 if ([string]::IsNullOrWhiteSpace($vpmChoice)) {
                     Write-Host "Input vuoto, riprova!" -ForegroundColor Red
+                    Start-Sleep -Seconds 1
                     continue
                 }
                 
@@ -446,6 +449,7 @@ while ($true) {
         
         default {
             Write-Host "`nScelta non valida! Riprova." -ForegroundColor Red
+            Start-Sleep -Seconds 1
         }
     }
 }
