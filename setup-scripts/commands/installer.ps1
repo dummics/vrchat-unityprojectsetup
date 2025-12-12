@@ -69,7 +69,7 @@ function Start-Installer {
     $logDir = Join-Path $scriptDir 'logs'
     if (-not (Test-Path $logDir)) { New-Item -Path $logDir -ItemType Directory -Force | Out-Null }
     $global:VRCSETUP_LOGFILE = Join-Path $logDir "vrcsetup-$(Get-Date -Format 'yyyyMMdd-HHmmss').log"
-    $configPath = Join-Path $scriptDir "config\vrcsetup.config"
+    $configPath = Join-Path $scriptDir "config\\vrcsetup.json"
 
     # If reset requested
     if ($projectPath -eq "-reset") {

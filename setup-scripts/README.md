@@ -7,7 +7,7 @@ Structure:
 - `commands/installer.ps1`: `Start-Installer` and installer helpers (VPM package installation, Unity create/import).
 - `commands/wizard.ps1`: `Start-Wizard` logic and menu.
 - `lib/`: shared helpers: menu, config, progress, utils.
-- `config/`: configuration and JSON files (vrcsetup.config, vrcsetup.lock.json).
+- `config/`: configuration and JSON files (vrcsetup.json, vrcsetup.lock.json).
 
 - Next steps:
 - Continue modularizing by moving more logic into `commands/installer.ps1` and splitting into smaller commands.

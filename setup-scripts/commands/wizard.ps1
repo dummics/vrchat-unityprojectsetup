@@ -10,7 +10,7 @@ $scriptDir = (Resolve-Path (Join-Path $cmdDir '..')).Path
 . "${scriptDir}\lib\utils.ps1"
 . "${scriptDir}\lib\config.ps1"
 . "${scriptDir}\commands\installer.ps1"
-$configPath = Join-Path $scriptDir "config\\vrcsetup.config"
+$configPath = Join-Path $scriptDir "config\\vrcsetup.json"
 
 # Main installer function is provided by commands\installer.ps1 (Start-Installer)
 
