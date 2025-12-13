@@ -18,24 +18,23 @@ function Install-PackagesInProject {
     Push-Location $ProjectPath
     try {
 
-    $manifestBackedUp = $false
+    # Backup manifest once before any changes (keeps logs in a sane order)
+    $manifestPath = Join-Path $ProjectPath "Packages\manifest.json"
+    if ((-not $Test) -and (Test-Path $manifestPath)) {
+        try {
+            $backupPath = "${manifestPath}.bak.$(Get-Date -Format 'yyyyMMdd-HHmmss')"
+            Copy-Item $manifestPath -Destination $backupPath -Force
+            Write-Host "Backup manifest created: ${backupPath}" -ForegroundColor Gray
+        } catch {
+            Write-Host "Failed to create manifest backup: ${_}" -ForegroundColor Yellow
+        }
+    }
+
     foreach ($pkg in $Packages.PSObject.Properties) {
         $packageName = $pkg.Name
         $packageVersion = $pkg.Value
 
         Write-Host "Processing package: ${packageName} : ${packageVersion}" -ForegroundColor Cyan
-        # Backup manifest before changes
-        $manifestPath = Join-Path $ProjectPath "Packages\manifest.json"
-        if ((-not $Test) -and (Test-Path $manifestPath) -and (-not $manifestBackedUp)) {
-            try {
-                $backupPath = "${manifestPath}.bak.$(Get-Date -Format 'yyyyMMdd-HHmmss')"
-                Copy-Item $manifestPath -Destination $backupPath -Force
-                Write-Host "Backup manifest created: ${backupPath}" -ForegroundColor Gray
-                $manifestBackedUp = $true
-            } catch {
-                Write-Host "Failed to create manifest backup: ${_}" -ForegroundColor Yellow
-            }
-        }
 
         if ($Test) {
             Write-Host "[TEST] Would add package: ${packageName}@${packageVersion}" -ForegroundColor DarkGray
@@ -167,7 +166,7 @@ function Start-Installer {
             Write-Host "Path: ${newProjectPath}" -ForegroundColor Gray
 
             $createLogFile = Join-Path $env:TEMP "unity-create-$(Get-Date -Format 'yyyyMMdd-HHmmss').log"
-            $createArgs = "-createProject `"${newProjectPath}`" -quit -batchmode -logFile `"${createLogFile}`""
+            $createArgs = "-createProject `"${newProjectPath}`" -buildTarget StandaloneWindows64 -quit -batchmode -logFile `"${createLogFile}`""
             $createProcess = Start-Process -FilePath $UNITY_EDITOR_PATH -ArgumentList $createArgs -NoNewWindow -PassThru
             Show-ProcessProgress -Process $createProcess -LogFile $createLogFile -Prefix "[Unity]" | Out-Null
 
@@ -194,21 +193,21 @@ function Start-Installer {
             try { $mainPackageResolved = (Resolve-Path $projectPath -ErrorAction Stop).Path } catch { }
 
             $workspaceRoot = (Resolve-Path (Join-Path $scriptDir '..\..')).Path
-            $commonPackagesPath = $null
+            ${commonPackagesPath} = $null
             if ($config -and ($config.PSObject.Properties.Name -contains 'UnityPackagesFolder')) {
                 $cfgCommon = [string]$config.UnityPackagesFolder
                 if (-not [string]::IsNullOrWhiteSpace($cfgCommon)) {
                     $cfgCommon = $cfgCommon.Trim().Trim('"').Trim("'")
                     if ([System.IO.Path]::IsPathRooted($cfgCommon)) {
-                        $commonPackagesPath = $cfgCommon
+                        ${commonPackagesPath} = $cfgCommon
                     } else {
-                        $commonPackagesPath = Join-Path $workspaceRoot $cfgCommon
+                        ${commonPackagesPath} = Join-Path $workspaceRoot $cfgCommon
                     }
                 }
             }
 
-            if ($commonPackagesPath -and (Test-Path $commonPackagesPath)) {
-                $commonPackages = Get-ChildItem -Path $commonPackagesPath -Filter "*.unitypackage" -ErrorAction SilentlyContinue
+            if (${commonPackagesPath} -and (Test-Path ${commonPackagesPath})) {
+                $commonPackages = Get-ChildItem -Path ${commonPackagesPath} -Filter "*.unitypackage" -ErrorAction SilentlyContinue
                 foreach ($pkg in $commonPackages) {
                     $pkgResolved = $pkg.FullName
                     try { $pkgResolved = (Resolve-Path $pkg.FullName -ErrorAction Stop).Path } catch { }
@@ -231,6 +230,7 @@ function Start-Installer {
             $importLogFile = Join-Path $env:TEMP "unity-import-main-$(Get-Date -Format 'yyyyMMdd-HHmmss').log"
             $importArgs = @(
                 "-projectPath", "`"${newProjectPath}`"",
+                "-buildTarget", "StandaloneWindows64",
                 "-importPackage", "`"$($packagesToImport[0])`"",
                 "-quit",
                 "-batchmode",
@@ -246,6 +246,7 @@ function Start-Installer {
                 $extraLog = Join-Path $env:TEMP ("unity-import-extra{0:00}-{1}.log" -f $idx, (Get-Date -Format 'yyyyMMdd-HHmmss'))
                 $extraArgs = @(
                     "-projectPath", "`"${newProjectPath}`"",
+                    "-buildTarget", "StandaloneWindows64",
                     "-importPackage", "`"${pkg}`"",
                     "-quit",
                     "-batchmode",
@@ -263,7 +264,10 @@ function Start-Installer {
 
                 $postImportScriptPath = Join-Path $editorDir "VrcSetupPostImport.cs"
                 @'
+using System;
+using System.Threading;
 using UnityEditor;
+using UnityEditor.Compilation;
 using UnityEngine;
 
 public static class VrcSetupPostImport
@@ -271,34 +275,45 @@ public static class VrcSetupPostImport
     // Called via -executeMethod VrcSetupPostImport.Run
     public static void Run()
     {
-        double start = EditorApplication.timeSinceStartup;
-        double lastBusy = start;
-        const double stableSeconds = 2.0;
-        const double timeoutSeconds = 600.0; // 10 minutes max
+        var start = DateTime.UtcNow;
+        var timeout = TimeSpan.FromMinutes(10);
 
         Debug.Log("[vrc-setup] Post-import settle started...");
-        AssetDatabase.Refresh();
 
-        EditorApplication.update += () =>
+        // Force a synchronous import pass so the first UI open is less likely to trigger a second big import.
+        try
         {
-            bool busy = EditorApplication.isCompiling || EditorApplication.isUpdating;
-            if (busy) lastBusy = EditorApplication.timeSinceStartup;
+            AssetDatabase.Refresh(ImportAssetOptions.ForceSynchronousImport);
+        }
+        catch
+        {
+            AssetDatabase.Refresh();
+        }
 
-            double now = EditorApplication.timeSinceStartup;
-            if (!busy && (now - lastBusy) >= stableSeconds)
+        // Block until Unity is stable (batchmode + -executeMethod can exit early if we rely on update callbacks).
+        while (EditorApplication.isCompiling || EditorApplication.isUpdating || CompilationPipeline.isCompiling)
+        {
+            Thread.Sleep(200);
+            if (DateTime.UtcNow - start > timeout)
             {
-                Debug.Log("[vrc-setup] Post-import settle complete, saving assets and quitting.");
-                AssetDatabase.SaveAssets();
-                EditorApplication.Exit(0);
+                Debug.LogWarning("[vrc-setup] Post-import settle TIMEOUT, continuing anyway.");
+                break;
             }
+        }
 
-            if ((now - start) >= timeoutSeconds)
-            {
-                Debug.LogWarning("[vrc-setup] Post-import settle TIMEOUT, saving assets and quitting anyway.");
-                AssetDatabase.SaveAssets();
-                EditorApplication.Exit(0);
-            }
-        };
+        // Second synchronous refresh to consolidate any queued imports.
+        try
+        {
+            AssetDatabase.Refresh(ImportAssetOptions.ForceSynchronousImport);
+        }
+        catch
+        {
+            AssetDatabase.Refresh();
+        }
+
+        AssetDatabase.SaveAssets();
+        Debug.Log("[vrc-setup] Post-import settle complete, quitting.");
+        EditorApplication.Exit(0);
     }
 }
 '@ | Set-Content -Path $postImportScriptPath -Encoding UTF8
@@ -306,8 +321,8 @@ public static class VrcSetupPostImport
                 $settleLogFile = Join-Path $env:TEMP "unity-postimport-$(Get-Date -Format 'yyyyMMdd-HHmmss').log"
                 $settleArgs = @(
                     "-projectPath", "`"${newProjectPath}`"",
+                    "-buildTarget", "StandaloneWindows64",
                     "-executeMethod", "VrcSetupPostImport.Run",
-                    "-quit",
                     "-batchmode",
                     "-logFile", "`"${settleLogFile}`""
                 )
@@ -320,6 +335,14 @@ public static class VrcSetupPostImport
             }
 
             $projectPath = $newProjectPath
+
+            # UnityPackage flow already:
+            # - ensured test framework
+            # - installed configured VPM packages
+            # - imported main + extra unitypackages
+            # - ran post-import finalize
+            # Don't run the generic "install packages in existing project" step again.
+            return 0
         }
     }
 
