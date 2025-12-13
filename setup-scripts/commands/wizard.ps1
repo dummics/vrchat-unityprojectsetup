@@ -641,6 +641,8 @@ function Setup-ProjectFlow {
             Save-Config -Config $config -ConfigPath $ConfigPath
         }
 
+        # Avoid leftover TUI lines before starting installer output
+        Clear-Host
         Start-Installer -projectPath $packagePath -NewProjectName $projectName
         Read-Host "Press ENTER to return"
         return
@@ -659,6 +661,8 @@ function Setup-ProjectFlow {
         $confirm = Show-Menu -Title "Confirm" -Header $confirmHeader -Options @("Proceed", "Cancel") -AllowCancel $false
         if ($confirm -ne 0) { return }
 
+        # Avoid leftover TUI lines before starting installer output
+        Clear-Host
         Start-Installer -projectPath $projectPath
         Read-Host "Press ENTER to return"
         return
@@ -692,6 +696,7 @@ function Start-Wizard {
             3 {
                 $confirm = Show-Menu -Title "Reset configuration" -Header "Reset config file?" -Options @("Yes, reset", "Cancel") -AllowCancel $false
                 if ($confirm -eq 0) {
+                    Clear-Host
                     Start-Installer -projectPath "-reset"
                     Read-Host "Press ENTER to continue"
                 }

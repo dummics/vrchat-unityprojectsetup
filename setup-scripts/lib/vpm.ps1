@@ -75,13 +75,20 @@ function Initialize-VpmTestProject {
 }
 
 function Get-VpmReposPath {
-    return (Join-Path $env:LOCALAPPDATA "VRChatCreatorCompanion\Repos")
+    if ([string]::IsNullOrWhiteSpace($env:LOCALAPPDATA)) {
+        return $null
+    }
+    try {
+        return (Join-Path $env:LOCALAPPDATA "VRChatCreatorCompanion\Repos")
+    } catch {
+        return $null
+    }
 }
 
 function Get-AllVpmPackageNames {
     $reposPath = Get-VpmReposPath
     $names = @()
-    if (Test-Path $reposPath) {
+    if (-not [string]::IsNullOrWhiteSpace($reposPath) -and (Test-Path $reposPath)) {
         Get-ChildItem $reposPath -Filter "*.json" -ErrorAction SilentlyContinue | ForEach-Object {
             try {
                 $repoData = Get-Content $_.FullName -Raw -ErrorAction SilentlyContinue | ConvertFrom-Json
@@ -107,7 +114,7 @@ function Get-VpmAvailableVersions {
 
     $reposPath = Get-VpmReposPath
     $available = @()
-    if (Test-Path $reposPath) {
+    if (-not [string]::IsNullOrWhiteSpace($reposPath) -and (Test-Path $reposPath)) {
         Get-ChildItem $reposPath -Filter "*.json" -ErrorAction SilentlyContinue | ForEach-Object {
             try {
                 $repoData = Get-Content $_.FullName -Raw -ErrorAction SilentlyContinue | ConvertFrom-Json
