@@ -220,16 +220,23 @@ function Show-Menu {
         $row = 0
 
         # Title
-        $row++
         if ($Title) {
-            Write-ConsoleAt -Left 0 -Top $row -Text $Title -ForegroundColor $theme.TitleFg -BackgroundColor ([Console]::BackgroundColor) -ClearToEnd
+            foreach ($line in ($Title -split "`r?`n")) {
+                $row++
+                Write-ConsoleAt -Left 0 -Top $row -Text $line -ForegroundColor $theme.TitleFg -BackgroundColor ([Console]::BackgroundColor) -ClearToEnd
+            }
             $row += 2
+        } else {
+            $row++
         }
 
         # Header
         if ($Header) {
-            Write-ConsoleAt -Left 0 -Top $row -Text $Header -ForegroundColor $theme.HeaderFg -BackgroundColor ([Console]::BackgroundColor) -ClearToEnd
-            $row += 2
+            foreach ($line in ($Header -split "`r?`n")) {
+                Write-ConsoleAt -Left 0 -Top $row -Text $line -ForegroundColor $theme.HeaderFg -BackgroundColor ([Console]::BackgroundColor) -ClearToEnd
+                $row++
+            }
+            $row += 1
         }
 
         $optionsTop = $row
@@ -568,6 +575,170 @@ function Show-MenuFilter {
             }
         }
     }
+    } finally {
+        Stop-TuiFrame -State $tui
+    }
+}
+
+# Helper: checklist paginata (checkbox) con Space toggle, A/N/I, Left/Right paging.
+function Show-ChecklistPaged {
+    param(
+        [string]$Title = "",
+        [string]$Header = "",
+        $Items,
+        [scriptblock]$ToLabel,
+        [bool]$DefaultSelected = $true,
+        [int]$MaxVisible = 15,
+        [bool]$AllowCancel = $true
+    )
+
+    if ($null -eq $Items) { return @() }
+    $itemsArr = @($Items)
+    if ($itemsArr.Count -eq 0) { return @() }
+
+    $theme = Get-TuiTheme
+    $tui = Start-TuiFrame -UseVt (Test-VtSupported)
+    $needsFullRender = $true
+
+    $current = 0
+    $offset = 0
+    $selected = @{}
+    for ($i = 0; $i -lt $itemsArr.Count; $i++) { $selected[$i] = [bool]$DefaultSelected }
+
+    function Get-Label {
+        param($Item, [int]$Index)
+        if ($ToLabel) {
+            try { return [string](& $ToLabel $Item $Index) } catch { }
+        }
+        return [string]$Item
+    }
+
+    function Render-Line {
+        param(
+            [int]$Index,
+            [int]$Top,
+            [bool]$IsCursor
+        )
+        $item = $itemsArr[$Index]
+        $isChecked = $false
+        try { $isChecked = [bool]$selected[$Index] } catch { $isChecked = $false }
+        $box = if ($isChecked) { "[x]" } else { "[ ]" }
+        $label = Get-Label -Item $item -Index $Index
+        $prefix = if ($IsCursor) { " > " } else { "   " }
+        $text = "${prefix}${box} ${label}"
+
+        if ($IsCursor) {
+            Write-ConsoleAt -Left 0 -Top $Top -Text $text -ForegroundColor $theme.SelectedFg -BackgroundColor $theme.SelectedBg -ClearToEnd
+        } else {
+            Write-ConsoleAt -Left 0 -Top $Top -Text $text -ForegroundColor $theme.OptionFg -BackgroundColor ([Console]::BackgroundColor) -ClearToEnd
+        }
+    }
+
+    try {
+        while ($true) {
+            $pageCapacity = [Math]::Max(1, $MaxVisible)
+            $total = $itemsArr.Count
+            $maxOffset = if ($total -le $pageCapacity) { 0 } else { [Math]::Max(0, $total - $pageCapacity) }
+            if ($offset -gt $maxOffset) { $offset = $maxOffset }
+            if ($offset -lt 0) { $offset = 0 }
+
+            $pageItems = @($itemsArr | Select-Object -Skip $offset -First $pageCapacity)
+            $visibleCount = $pageItems.Count
+            if ($visibleCount -eq 0) { return @() }
+
+            if ($current -lt 0) { $current = 0 }
+            if ($current -ge $visibleCount) { $current = [Math]::Max(0, $visibleCount - 1) }
+
+            if ($needsFullRender) {
+                Clear-TuiScreen -UseVt $tui.UseVt
+
+                $row = 0
+                $row++
+                if ($Title) {
+                    Write-ConsoleAt -Left 0 -Top $row -Text $Title -ForegroundColor $theme.TitleFg -BackgroundColor ([Console]::BackgroundColor) -ClearToEnd
+                    $row += 2
+                }
+
+                $help = "Space=toggle  |  A=all  N=none  I=invert  |  Left/Right=page  |  Enter=confirm  Esc=back"
+                $hdr = if ($Header) { "${Header}`n${help}" } else { $help }
+                Write-ConsoleAt -Left 0 -Top $row -Text $hdr -ForegroundColor $theme.HeaderFg -BackgroundColor ([Console]::BackgroundColor) -ClearToEnd
+                $row += 3
+
+                $pageIdx = [Math]::Floor($offset / $pageCapacity) + 1
+                $pageCount = [Math]::Ceiling($total / [double]$pageCapacity)
+                Write-ConsoleAt -Left 0 -Top $row -Text ("Projects: {0}  |  Page {1}/{2} (Left/Right)" -f $total, $pageIdx, $pageCount) -ForegroundColor $theme.MutedFg -BackgroundColor ([Console]::BackgroundColor) -ClearToEnd
+                $row += 2
+
+                $optionsTop = $row
+                for ($i = 0; $i -lt $visibleCount; $i++) {
+                    $globalIndex = $offset + $i
+                    Render-Line -Index $globalIndex -Top ($optionsTop + $i) -IsCursor ($i -eq $current)
+                }
+
+                $needsFullRender = $false
+            }
+
+            $keyInfo = [Console]::ReadKey($true)
+            switch ($keyInfo.Key) {
+                'UpArrow' {
+                    if ($current -gt 0) {
+                        $prev = $current
+                        $current--
+                        Render-Line -Index ($offset + $prev) -Top ($optionsTop + $prev) -IsCursor $false
+                        Render-Line -Index ($offset + $current) -Top ($optionsTop + $current) -IsCursor $true
+                    }
+                }
+                'DownArrow' {
+                    if ($current -lt ($visibleCount - 1)) {
+                        $prev = $current
+                        $current++
+                        Render-Line -Index ($offset + $prev) -Top ($optionsTop + $prev) -IsCursor $false
+                        Render-Line -Index ($offset + $current) -Top ($optionsTop + $current) -IsCursor $true
+                    }
+                }
+                'LeftArrow' {
+                    if ($total -gt $pageCapacity -and $offset -gt 0) {
+                        $offset = [Math]::Max(0, $offset - $pageCapacity)
+                        $current = 0
+                        $needsFullRender = $true
+                    }
+                }
+                'RightArrow' {
+                    if ($total -gt $pageCapacity -and ($offset + $pageCapacity) -lt $total) {
+                        $offset = [Math]::Min($maxOffset, ($offset + $pageCapacity))
+                        $current = 0
+                        $needsFullRender = $true
+                    }
+                }
+                'Spacebar' {
+                    $idx = $offset + $current
+                    $selected[$idx] = -not [bool]$selected[$idx]
+                    Render-Line -Index $idx -Top ($optionsTop + $current) -IsCursor $true
+                }
+                'A' {
+                    for ($i = 0; $i -lt $itemsArr.Count; $i++) { $selected[$i] = $true }
+                    $needsFullRender = $true
+                }
+                'N' {
+                    for ($i = 0; $i -lt $itemsArr.Count; $i++) { $selected[$i] = $false }
+                    $needsFullRender = $true
+                }
+                'I' {
+                    for ($i = 0; $i -lt $itemsArr.Count; $i++) { $selected[$i] = -not [bool]$selected[$i] }
+                    $needsFullRender = $true
+                }
+                'Enter' {
+                    $picked = @()
+                    for ($i = 0; $i -lt $itemsArr.Count; $i++) {
+                        if ([bool]$selected[$i]) { $picked += $itemsArr[$i] }
+                    }
+                    return $picked
+                }
+                'Escape' {
+                    if ($AllowCancel) { return $null }
+                }
+            }
+        }
     } finally {
         Stop-TuiFrame -State $tui
     }

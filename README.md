@@ -14,6 +14,17 @@ Implementation notes:
 
 Note: Unity may still show some import/preprocess on the first GUI open (especially for packages with many textures/scripts). The scripts can reduce double-work, but they can't fully eliminate Unity's first-time asset pipeline.
 
+Cancellation:
+- During Unity steps (create/import/finalize), press `Q` or `Esc` to cancel.
+- If you cancel in UnityPackage mode, the script stops Unity and deletes the created project folder.
+
+Incomplete project cleanup:
+- When creating a project from a UnityPackage, the installer writes a marker at `<Project>/.vrcsetup/state.json` with the current step.
+- The marker is created right after the Unity project is created (so a crash/failure afterwards can still be detected).
+- The project is marked `completed=true` only when all expected steps are marked as done.
+- In the wizard: `Setup project` → `Cleanup incomplete projects`.
+- It shows a paged checklist (default: all selected) so you can delete half-imported / dead projects safely.
+
 ## 📦 Structure
 
 ```
@@ -42,6 +53,8 @@ Run the script from PowerShell or via `vrcsetupfull.bat` to open the interactive
 vrcsetupfull.bat
 ```
 
+Note: the batch launcher opens the wizard in a NEW PowerShell window (pwsh if available) and then exits the current cmd session.
+
 ## 🧭 Modes of Operation
 
 
@@ -49,6 +62,10 @@ vrcsetupfull.bat
 The wizard offers the following options:
 
 1. Setup project (choose UnityPackage or existing project folder).
+     - If the target project folder already exists (UnityPackage flow), you'll get extra choices:
+         - Delete existing and recreate from the UnityPackage
+         - Use existing: setup VPM only
+         - Use existing: setup VPM + import extra UnityPackages (from `UnityPackagesFolder`)
 2. Manage VPM packages (type-to-filter picker + selectable versions when available).
 3. Advanced settings (naming rules + remembered project names).
 4. Reset the configuration.

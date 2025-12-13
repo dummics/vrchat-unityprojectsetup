@@ -7,6 +7,7 @@ $scriptDir = (Resolve-Path (Join-Path $cmdDir '..')).Path
 . "$scriptDir\lib\utils.ps1"
 . "$scriptDir\lib\progress.ps1"
 . "$scriptDir\lib\config.ps1"
+. "$scriptDir\lib\project-state.ps1"
 
 function Install-PackagesInProject {
     param(
@@ -78,7 +79,10 @@ function Start-Installer {
     param(
         [string]$projectPath,
         [switch]$Test,
-        [string]$NewProjectName
+        [string]$NewProjectName,
+        [switch]$OverwriteExistingProject,
+        [switch]$ImportExtras,
+        [string]$ExcludeUnityPackagePath
     )
 
     # prepare environment
@@ -134,12 +138,104 @@ function Start-Installer {
         return 1
     }
 
+    # Sticky overall progress (shows immediately; logs scroll below)
+    $overallProgressEnabled = $true
+    try {
+        if ($env:VRCSETUP_PROGRESS_PLAIN -eq '1') { $overallProgressEnabled = $false }
+        if ($null -eq $Host -or $null -eq $Host.UI -or $null -eq $Host.UI.RawUI) { $overallProgressEnabled = $false }
+    } catch { $overallProgressEnabled = $false }
+
+    $overallProgressActivity = "[Setup]"
+    if ($overallProgressEnabled) {
+        try { Write-Progress -Id 1 -Activity $overallProgressActivity -Status "Starting..." } catch { $overallProgressEnabled = $false }
+    }
+
+    function Resolve-ExtraUnityPackagesFromConfig {
+        param(
+            $Config,
+            [string]$WorkspaceRoot,
+            [string]$ExcludeUnityPackagePath
+        )
+
+        $commonPackagesPath = $null
+        if ($Config -and ($Config.PSObject.Properties.Name -contains 'UnityPackagesFolder')) {
+            $cfgCommon = [string]$Config.UnityPackagesFolder
+            if (-not [string]::IsNullOrWhiteSpace($cfgCommon)) {
+                $cfgCommon = $cfgCommon.Trim().Trim('"').Trim("'")
+                if ([System.IO.Path]::IsPathRooted($cfgCommon)) {
+                    $commonPackagesPath = $cfgCommon
+                } else {
+                    $commonPackagesPath = Join-Path $WorkspaceRoot $cfgCommon
+                }
+            }
+        }
+
+        if (-not $commonPackagesPath) { return @() }
+        if (-not (Test-Path $commonPackagesPath)) { return @() }
+
+        $excludeResolved = $null
+        if (-not [string]::IsNullOrWhiteSpace($ExcludeUnityPackagePath)) {
+            try { $excludeResolved = (Resolve-Path $ExcludeUnityPackagePath -ErrorAction Stop).Path } catch { $excludeResolved = $ExcludeUnityPackagePath }
+        }
+
+        $extra = @()
+        $commonPackages = Get-ChildItem -Path $commonPackagesPath -Filter "*.unitypackage" -ErrorAction SilentlyContinue
+        foreach ($pkg in $commonPackages) {
+            $pkgResolved = $pkg.FullName
+            try { $pkgResolved = (Resolve-Path $pkg.FullName -ErrorAction Stop).Path } catch { }
+
+            if ($excludeResolved -and ($pkgResolved -eq $excludeResolved)) { continue }
+            $extra += $pkg.FullName
+        }
+        return $extra
+    }
+
+    function Import-UnityPackagesSequential {
+        param(
+            [string]$ProjectPath,
+            [string[]]$UnityPackagePaths,
+            [string]$UnityEditorPath,
+            [string]$OverallProgressActivity,
+            [bool]$OverallProgressEnabled
+        )
+
+        if (-not $UnityPackagePaths -or $UnityPackagePaths.Count -eq 0) { return 0 }
+        if (-not $UnityEditorPath -or (-not (Test-Path $UnityEditorPath))) {
+            Write-Host "Error: Unity Editor not found at: ${UnityEditorPath}" -ForegroundColor Red
+            return 1
+        }
+
+        $idx = 0
+        foreach ($pkg in $UnityPackagePaths) {
+            $idx++
+            $log = Join-Path $env:TEMP ("unity-import-extra{0:00}-{1}.log" -f $idx, (Get-Date -Format 'yyyyMMdd-HHmmss'))
+            $args = @(
+                "-projectPath", "`"${ProjectPath}`"",
+                "-buildTarget", "StandaloneWindows64",
+                "-importPackage", "`"${pkg}`"",
+                "-quit",
+                "-batchmode",
+                "-logFile", "`"${log}`""
+            )
+            $p = Start-Process -FilePath $UnityEditorPath -ArgumentList $args -NoNewWindow -PassThru
+            if ($OverallProgressEnabled) { try { Write-Progress -Id 1 -Activity $OverallProgressActivity -Status ("Importing UnityPackage extra ({0}/{1})..." -f $idx, $UnityPackagePaths.Count) } catch { } }
+            $res = Show-ProcessProgress -Process $p -LogFile $log -Prefix ("[Import:extra {0}/{1}]" -f $idx, $UnityPackagePaths.Count) -AllowCancel -ProgressId 2 -ParentProgressId 1
+            if ($res -and $res.Cancelled) { return 1 }
+        }
+        return 0
+    }
+
     # UnityPackage mode: create a new project, import package(s), then continue install on the new project
     if ($projectPath -like "*.unitypackage") {
         Write-Host "Detected UnityPackage: creating new project..." -ForegroundColor Cyan
 
         $packageName = [System.IO.Path]::GetFileNameWithoutExtension($projectPath)
         $projectName = if (-not [string]::IsNullOrWhiteSpace($NewProjectName)) { $NewProjectName } else { $packageName }
+
+        if ($overallProgressEnabled) {
+            $overallProgressActivity = "[Setup] ${projectName}"
+            try { Write-Progress -Id 1 -Activity $overallProgressActivity -Status ("UnityPackage: {0}" -f ([System.IO.Path]::GetFileName($projectPath))) } catch { }
+        }
         if (-not $UNITY_PROJECTS_ROOT) {
             Write-Host "Error: UnityProjectsRoot is missing in config." -ForegroundColor Red
             return 1
@@ -147,8 +243,18 @@ function Start-Installer {
 
         $newProjectPath = Join-Path $UNITY_PROJECTS_ROOT $projectName
         if (Test-Path $newProjectPath) {
-            Write-Host "Error: project already exists at: ${newProjectPath}" -ForegroundColor Red
-            return 1
+            if ($OverwriteExistingProject) {
+                try {
+                    Write-Host "Project already exists, deleting (overwrite enabled): ${newProjectPath}" -ForegroundColor Yellow
+                    Remove-Item -Path $newProjectPath -Recurse -Force -ErrorAction Stop
+                } catch {
+                    Write-Host "Error: failed to delete existing project: ${_}" -ForegroundColor Red
+                    return 1
+                }
+            } else {
+                Write-Host "Error: project already exists at: ${newProjectPath}" -ForegroundColor Red
+                return 1
+            }
         }
 
         if (-not $UNITY_EDITOR_PATH -or (-not (Test-Path $UNITY_EDITOR_PATH))) {
@@ -165,10 +271,24 @@ function Start-Installer {
             Write-Host "Creating project: ${projectName}" -ForegroundColor Green
             Write-Host "Path: ${newProjectPath}" -ForegroundColor Gray
 
+            $onCancelDeleteProject = {
+                try {
+                    if (Test-Path $newProjectPath) {
+                        Write-Host "Cancelling: deleting created project folder..." -ForegroundColor Yellow
+                        Remove-Item -Path $newProjectPath -Recurse -Force -ErrorAction SilentlyContinue
+                        Write-Host "Deleted: ${newProjectPath}" -ForegroundColor Yellow
+                    }
+                } catch {
+                    Write-Host "Warning: failed to delete project folder: ${_}" -ForegroundColor Yellow
+                }
+            }
+
             $createLogFile = Join-Path $env:TEMP "unity-create-$(Get-Date -Format 'yyyyMMdd-HHmmss').log"
             $createArgs = "-createProject `"${newProjectPath}`" -buildTarget StandaloneWindows64 -quit -batchmode -logFile `"${createLogFile}`""
             $createProcess = Start-Process -FilePath $UNITY_EDITOR_PATH -ArgumentList $createArgs -NoNewWindow -PassThru
-            Show-ProcessProgress -Process $createProcess -LogFile $createLogFile -Prefix "[Unity]" | Out-Null
+            if ($overallProgressEnabled) { try { Write-Progress -Id 1 -Activity $overallProgressActivity -Status "Creating Unity project..." } catch { } }
+            $createRes = Show-ProcessProgress -Process $createProcess -LogFile $createLogFile -Prefix "[Unity]" -AllowCancel -OnCancel $onCancelDeleteProject -ProgressId 2 -ParentProgressId 1
+            if ($createRes -and $createRes.Cancelled) { return 1 }
 
             if (-not (Test-Path (Join-Path $newProjectPath "Assets"))) {
                 Write-Host "Error: project was not created correctly." -ForegroundColor Red
@@ -180,12 +300,21 @@ function Start-Installer {
                 return 1
             }
 
+            # Create state marker for cleanup (incomplete projects)
+            try {
+                Initialize-VrcSetupProjectState -ProjectPath $newProjectPath -UnityPackagePath $projectPath -ProjectName $projectName | Out-Null
+            } catch { }
+
             # 1) Ensure Unity Test Framework + any required manifest tweaks BEFORE importing the big UnityPackage.
+            if ($overallProgressEnabled) { try { Write-Progress -Id 1 -Activity $overallProgressActivity -Status "Applying Unity Test Framework (NUnit)..." } catch { } }
             Install-NUnitPackage -ProjectPath $newProjectPath -Test:$Test
+            try { Set-VrcSetupProjectStep -ProjectPath $newProjectPath -Step 'nunit' -Done $true } catch { }
 
             # 2) Install configured VPM packages BEFORE importing the UnityPackage(s).
             # This usually reduces re-import work when the GUI opens (SDK + dependencies already present).
+            if ($overallProgressEnabled) { try { Write-Progress -Id 1 -Activity $overallProgressActivity -Status "Installing VPM packages..." } catch { } }
             Install-PackagesInProject -ProjectPath $newProjectPath -Packages $VPM_PACKAGES -Test:$Test | Out-Null
+            try { Set-VrcSetupProjectStep -ProjectPath $newProjectPath -Step 'vpm' -Done $true } catch { }
 
             $packagesToImport = @($projectPath)
 
@@ -237,7 +366,10 @@ function Start-Installer {
                 "-logFile", "`"${importLogFile}`""
             )
             $importProcess = Start-Process -FilePath $UNITY_EDITOR_PATH -ArgumentList $importArgs -NoNewWindow -PassThru
-            Show-ProcessProgress -Process $importProcess -LogFile $importLogFile -Prefix "[Import:main]" | Out-Null
+            if ($overallProgressEnabled) { try { Write-Progress -Id 1 -Activity $overallProgressActivity -Status "Importing UnityPackage (main)..." } catch { } }
+            $importRes = Show-ProcessProgress -Process $importProcess -LogFile $importLogFile -Prefix "[Import:main]" -AllowCancel -OnCancel $onCancelDeleteProject -ProgressId 2 -ParentProgressId 1
+            if ($importRes -and $importRes.Cancelled) { return 1 }
+            try { Set-VrcSetupProjectStep -ProjectPath $newProjectPath -Step 'importMain' -Done $true } catch { }
 
             # Extra packages (if any) AFTER main
             $idx = 0
@@ -253,8 +385,15 @@ function Start-Installer {
                     "-logFile", "`"${extraLog}`""
                 )
                 $p = Start-Process -FilePath $UNITY_EDITOR_PATH -ArgumentList $extraArgs -NoNewWindow -PassThru
-                Show-ProcessProgress -Process $p -LogFile $extraLog -Prefix ("[Import:extra {0}/{1}]" -f $idx, $extraPackages.Count) | Out-Null
+                if ($overallProgressEnabled) { try { Write-Progress -Id 1 -Activity $overallProgressActivity -Status ("Importing UnityPackage (extra {0}/{1})..." -f $idx, $extraPackages.Count) } catch { } }
+                $extraRes = Show-ProcessProgress -Process $p -LogFile $extraLog -Prefix ("[Import:extra {0}/{1}]" -f $idx, $extraPackages.Count) -AllowCancel -OnCancel $onCancelDeleteProject -ProgressId 2 -ParentProgressId 1
+                if ($extraRes -and $extraRes.Cancelled) { return 1 }
             }
+
+            try {
+                # If there are no extras, consider this step done.
+                Set-VrcSetupProjectStep -ProjectPath $newProjectPath -Step 'importExtras' -Done $true
+            } catch { }
 
             # 4) Post-import settle pass (bounded) to let Unity finish asset pipeline work.
             # This helps avoid a full re-import/crunch pass when opening the GUI right after.
@@ -272,6 +411,26 @@ using UnityEngine;
 
 public static class VrcSetupPostImport
 {
+    private static bool IsCompilationPipelineCompiling()
+    {
+        try
+        {
+            var t = typeof(CompilationPipeline);
+            var p = t.GetProperty("isCompiling") ?? t.GetProperty("IsCompiling");
+            if (p != null && p.PropertyType == typeof(bool))
+            {
+                return (bool)p.GetValue(null, null);
+            }
+            var f = t.GetField("isCompiling") ?? t.GetField("IsCompiling");
+            if (f != null && f.FieldType == typeof(bool))
+            {
+                return (bool)f.GetValue(null);
+            }
+        }
+        catch { }
+        return false;
+    }
+
     // Called via -executeMethod VrcSetupPostImport.Run
     public static void Run()
     {
@@ -291,7 +450,7 @@ public static class VrcSetupPostImport
         }
 
         // Block until Unity is stable (batchmode + -executeMethod can exit early if we rely on update callbacks).
-        while (EditorApplication.isCompiling || EditorApplication.isUpdating || CompilationPipeline.isCompiling)
+        while (EditorApplication.isCompiling || EditorApplication.isUpdating || IsCompilationPipelineCompiling())
         {
             Thread.Sleep(200);
             if (DateTime.UtcNow - start > timeout)
@@ -329,9 +488,19 @@ public static class VrcSetupPostImport
 
                 Write-Host "Finalizing import (post-import settle)..." -ForegroundColor Cyan
                 $settleProcess = Start-Process -FilePath $UNITY_EDITOR_PATH -ArgumentList $settleArgs -NoNewWindow -PassThru
-                Show-ProcessProgress -Process $settleProcess -LogFile $settleLogFile -Prefix "[Finalize]" | Out-Null
+                if ($overallProgressEnabled) { try { Write-Progress -Id 1 -Activity $overallProgressActivity -Status "Finalizing (settle/flush)..." } catch { } }
+                $settleRes = Show-ProcessProgress -Process $settleProcess -LogFile $settleLogFile -Prefix "[Finalize]" -AllowCancel -OnCancel $onCancelDeleteProject -ProgressId 2 -ParentProgressId 1
+                if ($settleRes -and $settleRes.Cancelled) { return 1 }
+                try { Set-VrcSetupProjectStep -ProjectPath $newProjectPath -Step 'finalize' -Done $true } catch { }
             } catch {
                 Write-Host "Warning: post-import finalize step failed: ${_}" -ForegroundColor Yellow
+            }
+
+            # Mark completed only if steps are all done (avoids false positives).
+            try { Complete-VrcSetupProjectState -ProjectPath $newProjectPath } catch { }
+
+            if ($overallProgressEnabled) {
+                try { Write-Progress -Id 1 -Activity $overallProgressActivity -Completed } catch { }
             }
 
             $projectPath = $newProjectPath
@@ -350,7 +519,32 @@ public static class VrcSetupPostImport
     $assetsPath = Join-Path $projectPath "Assets"
     $packagesPath = Join-Path $projectPath "Packages"
     if ((Test-Path $assetsPath) -or (Test-Path $packagesPath)) {
+        if ($overallProgressEnabled) {
+            $leaf = $null
+            try { $leaf = Split-Path -Leaf $projectPath } catch { $leaf = $null }
+            if (-not [string]::IsNullOrWhiteSpace($leaf)) {
+                $overallProgressActivity = "[Setup] ${leaf}"
+                try { Write-Progress -Id 1 -Activity $overallProgressActivity -Status "Preparing..." } catch { }
+            }
+        }
+        if ($overallProgressEnabled) { try { Write-Progress -Id 1 -Activity $overallProgressActivity -Status "Installing VPM packages..." } catch { } }
         Install-PackagesInProject -ProjectPath $projectPath -Packages $VPM_PACKAGES -Test:$Test | Out-Null
+
+        if ($ImportExtras) {
+            $workspaceRoot = (Resolve-Path (Join-Path $scriptDir '..\..')).Path
+            $extraPkgs = Resolve-ExtraUnityPackagesFromConfig -Config $config -WorkspaceRoot $workspaceRoot -ExcludeUnityPackagePath $ExcludeUnityPackagePath
+            if (-not $extraPkgs -or $extraPkgs.Count -eq 0) {
+                Write-Host "No extra UnityPackages configured/found to import." -ForegroundColor Yellow
+            } else {
+                Write-Host ("Importing extra UnityPackages from config... count={0}" -f $extraPkgs.Count) -ForegroundColor Cyan
+                $impRes = Import-UnityPackagesSequential -ProjectPath $projectPath -UnityPackagePaths $extraPkgs -UnityEditorPath $UNITY_EDITOR_PATH -OverallProgressActivity $overallProgressActivity -OverallProgressEnabled $overallProgressEnabled
+                if ($impRes -ne 0) { return 1 }
+            }
+        }
+
+        if ($overallProgressEnabled) {
+            try { Write-Progress -Id 1 -Activity $overallProgressActivity -Completed } catch { }
+        }
         return 0
     }
 
