@@ -6,6 +6,8 @@ Automated scripts to create and configure VRChat Unity projects, add VPM package
 
 This folder contains a set of scripts that help you quickly create, configure, and maintain VRChat Unity projects, including support for importing Unity packages and managing VPM packages/versions.
 
+UnityPackage mode order (important): the installer creates the project, applies required manifest tweaks (Unity Test Framework), installs configured VPM packages, then imports the UnityPackage(s) and runs a bounded post-import finalize step. This reduces Unity doing a second full import/crunch pass when you open the project in the GUI.
+
 ## 📦 Structure
 
 ```

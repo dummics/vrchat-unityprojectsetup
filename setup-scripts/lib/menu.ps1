@@ -166,6 +166,16 @@ function Stop-TuiFrame {
     try {
         [Console]::CursorVisible = [bool]$State.CursorWasVisible
     } catch { }
+
+    # After a TUI interaction, the cursor may still be parked on an option line.
+    # Move it to a safe spot so subsequent Write-Host/Read-Host doesn't overwrite the menu.
+    try {
+        $h = [Console]::WindowHeight
+        if ($h -gt 0) {
+            [Console]::SetCursorPosition(0, [Math]::Max(0, $h - 1))
+            [Console]::WriteLine('')
+        }
+    } catch { }
 }
 
 function Write-TuiFrame {

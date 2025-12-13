@@ -18,6 +18,7 @@ Wizard UX notes:
 - VT/ANSI escape sequences are opt-in: set `VRCSETUP_TUI_VT=1` only if your terminal supports them.
 - Backend commands avoid printing progress lines to keep the TUI clean.
 - Wizard clears the screen before running the installer to avoid leftover menu artifacts.
+- Wizard clears the screen before text prompts (drag&drop paths) to avoid overlap with the menu.
 - Action rows are visually separated (2 blank lines) and color-coded (Back = red).
 - "Setup project" is unified: choose UnityPackage or existing project.
 - VPM packages editor is 2-step: select package → choose action (change version/remove), plus add package (type-to-filter).
@@ -29,7 +30,7 @@ Wizard UX notes:
 - UnityPackage extra-import folder is configurable (Advanced settings):
 	- Config key: `UnityPackagesFolder`
 	- By default it's DISABLED (no extra imports).
-	- If set, the installer will also import every `*.unitypackage` found in that folder (besides the one you selected).
+	- If set, the installer will also import every `*.unitypackage` found in that folder (besides the one you selected), after the main package (can be multiple).
 
 Optional tooling:
 - If a local `vrc-get` exe is present, the wizard can search packages and list versions even when the local VCC repos cache is empty.

@@ -100,7 +100,8 @@ function Apply-ProjectNamingRules {
         if ([string]::IsNullOrWhiteSpace($pat)) { continue }
         try {
             $name = ($name -replace $pat, "")
-        } catch {
+        }
+        catch {
             # ignore invalid regex
         }
     }
@@ -133,7 +134,8 @@ function Advanced-NamingSettings {
             $cfgCommon = ([string]$config.UnityPackagesFolder).Trim().Trim('"').Trim("'")
             if ([System.IO.Path]::IsPathRooted($cfgCommon)) {
                 $commonPackagesStatus = $cfgCommon
-            } else {
+            }
+            else {
                 $commonPackagesStatus = Join-Path $workspaceRoot $cfgCommon
             }
         }
@@ -181,7 +183,8 @@ function Advanced-NamingSettings {
                         if ([string]::IsNullOrWhiteSpace($newPat)) { continue }
                         try {
                             [void][regex]::new($newPat)
-                        } catch {
+                        }
+                        catch {
                             Write-Host "Invalid regex." -ForegroundColor Red
                             Read-Host "Press ENTER"
                             continue
@@ -234,7 +237,8 @@ function Advanced-NamingSettings {
                     if ($create -ne 0) { continue }
                     try {
                         New-Item -Path $resolved -ItemType Directory -Force | Out-Null
-                    } catch {
+                    }
+                    catch {
                         Write-Host "Failed to create folder: ${_}" -ForegroundColor Red
                         Read-Host "Press ENTER" | Out-Null
                         continue
@@ -262,7 +266,8 @@ function Select-VpmVersion {
     if ($vrcGetVersions.Count -gt 0) {
         $available = $vrcGetVersions
         $sourceLabel = "vrc-get"
-    } else {
+    }
+    else {
         $available = Get-VpmAvailableVersions -PackageName $PackageName
         $sourceLabel = "VCC repos"
     }
@@ -281,7 +286,8 @@ function Select-VpmVersion {
 
         if ($total -le 0) {
             $page = 0
-        } else {
+        }
+        else {
             $maxPage = [Math]::Max(0, [Math]::Floor(($total - 1) / $pageSize))
             if ($page -gt $maxPage) { $page = $maxPage }
             if ($page -lt 0) { $page = 0 }
@@ -294,7 +300,8 @@ function Select-VpmVersion {
         if ($total -gt 0) {
             if ($startIdx -eq $endIdx) {
                 $pageItems = @($filtered[$startIdx])
-            } else {
+            }
+            else {
                 $pageItems = @($filtered[$startIdx..$endIdx])
             }
         }
@@ -302,7 +309,8 @@ function Select-VpmVersion {
         $header = "Package: ${PackageName}`nCurrent: ${CurrentVersion}`n"
         if ($available.Count -gt 0) {
             $header += "Versions found: ${($available.Count)} (from ${sourceLabel})`n"
-        } else {
+        }
+        else {
             $header += "No versions found. You can still enter manually.`n"
         }
 
@@ -310,12 +318,13 @@ function Select-VpmVersion {
         $header += "Filter: ${fLabel}`n"
         if ($total -gt 0) {
             $header += ("Showing: {0}-{1} of {2} (page {3})`n" -f ($startIdx + 1), ($endIdx + 1), $total, ($page + 1))
-        } else {
+        }
+        else {
             $header += "No matches for current filter.`n"
         }
 
         if ($total -gt $pageSize) {
-                $header += "Tip: use Left/Right to change page faster.`n"
+            $header += "Tip: use Left/Right to change page faster.`n"
         }
 
         $optLatest = "latest"
@@ -374,7 +383,8 @@ function Select-VpmVersion {
             $start = $null
             if ($txt -match '^(?<a>\d+)\s*-\s*(?<b>\d+)$') {
                 $start = [int]$Matches['a']
-            } elseif ($txt -match '^(?<a>\d+)$') {
+            }
+            elseif ($txt -match '^(?<a>\d+)$') {
                 $start = [int]$Matches['a']
             }
             if ($null -eq $start -or $start -lt 1) { continue }
@@ -392,8 +402,8 @@ function Select-VpmVersion {
 
         # Selected a version or "latest"
         return $picked
-        }
     }
+}
 
 function Edit-VpmPackages {
     param(
@@ -484,7 +494,8 @@ function Edit-VpmPackages {
                 foreach ($x in $found) {
                     if ($x.DisplayName) {
                         $displayOptions += ("{0} ({1})" -f $x.DisplayName, $x.Id)
-                    } else {
+                    }
+                    else {
                         $displayOptions += $x.Id
                     }
                 }
@@ -506,7 +517,8 @@ function Edit-VpmPackages {
             elseif ($pickedName -eq $manualOption) {
                 $newPackage = Read-Host "Package name"
                 $newPackage = $newPackage.Trim()
-            } else {
+            }
+            else {
                 $newPackage = $pickedName
             }
 
@@ -608,6 +620,7 @@ function Setup-ProjectFlow {
     if ($config) { $config = Ensure-ConfigDefaults -Config $config }
 
     if ($setupChoice -eq 0) {
+        Clear-Host
         Write-Host "Drag here the .unitypackage file (or paste the full path):" -ForegroundColor Yellow
         $packagePath = Normalize-UserPath (Read-Host "UnityPackage path")
         if ([string]::IsNullOrWhiteSpace($packagePath)) { return }
@@ -649,6 +662,7 @@ function Setup-ProjectFlow {
     }
 
     if ($setupChoice -eq 1) {
+        Clear-Host
         Write-Host "Drag here the Unity project folder (or paste the path):" -ForegroundColor Yellow
         $projectPath = Normalize-UserPath (Read-Host "Project path")
         if ([string]::IsNullOrWhiteSpace($projectPath)) { return }

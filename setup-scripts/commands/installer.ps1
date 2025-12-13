@@ -181,7 +181,17 @@ function Start-Installer {
                 return 1
             }
 
+            # 1) Ensure Unity Test Framework + any required manifest tweaks BEFORE importing the big UnityPackage.
+            Install-NUnitPackage -ProjectPath $newProjectPath -Test:$Test
+
+            # 2) Install configured VPM packages BEFORE importing the UnityPackage(s).
+            # This usually reduces re-import work when the GUI opens (SDK + dependencies already present).
+            Install-PackagesInProject -ProjectPath $newProjectPath -Packages $VPM_PACKAGES -Test:$Test | Out-Null
+
             $packagesToImport = @($projectPath)
+
+            $mainPackageResolved = $projectPath
+            try { $mainPackageResolved = (Resolve-Path $projectPath -ErrorAction Stop).Path } catch { }
 
             $workspaceRoot = (Resolve-Path (Join-Path $scriptDir '..\..')).Path
             $commonPackagesPath = $null
@@ -200,30 +210,114 @@ function Start-Installer {
             if ($commonPackagesPath -and (Test-Path $commonPackagesPath)) {
                 $commonPackages = Get-ChildItem -Path $commonPackagesPath -Filter "*.unitypackage" -ErrorAction SilentlyContinue
                 foreach ($pkg in $commonPackages) {
-                    if ($pkg.FullName -ne $projectPath) {
+                    $pkgResolved = $pkg.FullName
+                    try { $pkgResolved = (Resolve-Path $pkg.FullName -ErrorAction Stop).Path } catch { }
+                    if ($pkgResolved -ne $mainPackageResolved) {
                         $packagesToImport += $pkg.FullName
                     }
                 }
             }
 
-            $importLogFile = Join-Path $env:TEMP "unity-import-$(Get-Date -Format 'yyyyMMdd-HHmmss').log"
-            $importArgs = @(
-                "-projectPath", "`"${newProjectPath}`""
-            )
-            foreach ($pkg in $packagesToImport) {
-                $importArgs += "-importPackage"
-                $importArgs += "`"${pkg}`""
+            # 3) Import UnityPackage(s) at the end.
+            # Importing multiple packages in one Unity invocation can be flaky; do it sequentially to guarantee order.
+            $extraPackages = @()
+            if ($packagesToImport.Count -gt 1) {
+                $extraPackages = @($packagesToImport | Select-Object -Skip 1)
             }
-            $importArgs += "-quit"
-            $importArgs += "-batchmode"
-            $importArgs += "-logFile"
-            $importArgs += "`"${importLogFile}`""
 
-            Write-Host "Importing UnityPackage(s)..." -ForegroundColor Cyan
+            Write-Host ("Importing UnityPackage(s)... (main=1, extra={0})" -f $extraPackages.Count) -ForegroundColor Cyan
+
+            # Main package first
+            $importLogFile = Join-Path $env:TEMP "unity-import-main-$(Get-Date -Format 'yyyyMMdd-HHmmss').log"
+            $importArgs = @(
+                "-projectPath", "`"${newProjectPath}`"",
+                "-importPackage", "`"$($packagesToImport[0])`"",
+                "-quit",
+                "-batchmode",
+                "-logFile", "`"${importLogFile}`""
+            )
             $importProcess = Start-Process -FilePath $UNITY_EDITOR_PATH -ArgumentList $importArgs -NoNewWindow -PassThru
-            Show-ProcessProgress -Process $importProcess -LogFile $importLogFile -Prefix "[Import]" | Out-Null
+            Show-ProcessProgress -Process $importProcess -LogFile $importLogFile -Prefix "[Import:main]" | Out-Null
 
-            Install-NUnitPackage -ProjectPath $newProjectPath -Test:$Test
+            # Extra packages (if any) AFTER main
+            $idx = 0
+            foreach ($pkg in $extraPackages) {
+                $idx++
+                $extraLog = Join-Path $env:TEMP ("unity-import-extra{0:00}-{1}.log" -f $idx, (Get-Date -Format 'yyyyMMdd-HHmmss'))
+                $extraArgs = @(
+                    "-projectPath", "`"${newProjectPath}`"",
+                    "-importPackage", "`"${pkg}`"",
+                    "-quit",
+                    "-batchmode",
+                    "-logFile", "`"${extraLog}`""
+                )
+                $p = Start-Process -FilePath $UNITY_EDITOR_PATH -ArgumentList $extraArgs -NoNewWindow -PassThru
+                Show-ProcessProgress -Process $p -LogFile $extraLog -Prefix ("[Import:extra {0}/{1}]" -f $idx, $extraPackages.Count) | Out-Null
+            }
+
+            # 4) Post-import settle pass (bounded) to let Unity finish asset pipeline work.
+            # This helps avoid a full re-import/crunch pass when opening the GUI right after.
+            try {
+                $editorDir = Join-Path $newProjectPath "Assets\\Editor"
+                if (-not (Test-Path $editorDir)) { New-Item -Path $editorDir -ItemType Directory -Force | Out-Null }
+
+                $postImportScriptPath = Join-Path $editorDir "VrcSetupPostImport.cs"
+                @'
+using UnityEditor;
+using UnityEngine;
+
+public static class VrcSetupPostImport
+{
+    // Called via -executeMethod VrcSetupPostImport.Run
+    public static void Run()
+    {
+        double start = EditorApplication.timeSinceStartup;
+        double lastBusy = start;
+        const double stableSeconds = 2.0;
+        const double timeoutSeconds = 600.0; // 10 minutes max
+
+        Debug.Log("[vrc-setup] Post-import settle started...");
+        AssetDatabase.Refresh();
+
+        EditorApplication.update += () =>
+        {
+            bool busy = EditorApplication.isCompiling || EditorApplication.isUpdating;
+            if (busy) lastBusy = EditorApplication.timeSinceStartup;
+
+            double now = EditorApplication.timeSinceStartup;
+            if (!busy && (now - lastBusy) >= stableSeconds)
+            {
+                Debug.Log("[vrc-setup] Post-import settle complete, saving assets and quitting.");
+                AssetDatabase.SaveAssets();
+                EditorApplication.Exit(0);
+            }
+
+            if ((now - start) >= timeoutSeconds)
+            {
+                Debug.LogWarning("[vrc-setup] Post-import settle TIMEOUT, saving assets and quitting anyway.");
+                AssetDatabase.SaveAssets();
+                EditorApplication.Exit(0);
+            }
+        };
+    }
+}
+'@ | Set-Content -Path $postImportScriptPath -Encoding UTF8
+
+                $settleLogFile = Join-Path $env:TEMP "unity-postimport-$(Get-Date -Format 'yyyyMMdd-HHmmss').log"
+                $settleArgs = @(
+                    "-projectPath", "`"${newProjectPath}`"",
+                    "-executeMethod", "VrcSetupPostImport.Run",
+                    "-quit",
+                    "-batchmode",
+                    "-logFile", "`"${settleLogFile}`""
+                )
+
+                Write-Host "Finalizing import (post-import settle)..." -ForegroundColor Cyan
+                $settleProcess = Start-Process -FilePath $UNITY_EDITOR_PATH -ArgumentList $settleArgs -NoNewWindow -PassThru
+                Show-ProcessProgress -Process $settleProcess -LogFile $settleLogFile -Prefix "[Finalize]" | Out-Null
+            } catch {
+                Write-Host "Warning: post-import finalize step failed: ${_}" -ForegroundColor Yellow
+            }
 
             $projectPath = $newProjectPath
         }
