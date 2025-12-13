@@ -1,4 +1,4 @@
-{
+﻿{
     "VpmPackages":  {
                         "com.vrchat.base":  "latest",
                         "com.vrchat.avatars":  "latest",
@@ -9,5 +9,18 @@
                         "com.vrchat.core.vpm-resolver":  "latest"
                     },
     "UnityEditorPath":  "C:\\Program Files\\Unity\\Hub\\Editor\\2022.3.22f1\\Editor\\Unity.exe",
-    "UnityProjectsRoot":  "F:\\UNITY PROJECTS"
+    "UnityProjectsRoot":  "F:\\UNITY PROJECTS",
+    "Naming":  {
+                   "DefaultPrefix":  "",
+                   "DefaultSuffix":  "",
+                   "RegexRemovePatterns":  [
+
+                                           ],
+                   "RememberUnityPackageNames":  true
+               },
+    "SavedProjectNames":  {
+                              "E:\\! AVATAR ARCHIVE\\! LICENSING PACKAGES\\Scari - SAI\\SaiByScariOPTI PROTECTED.unitypackage":  "SaiByScariOPTI PROTECTED"
+                          },
+    "LastProjectName":  "SaiByScariOPTI PROTECTED",
+    "LastUnityPackagePath":  "E:\\! AVATAR ARCHIVE\\! LICENSING PACKAGES\\Scari - SAI\\SaiByScariOPTI PROTECTED.unitypackage"
 }

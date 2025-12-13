@@ -12,6 +12,9 @@ $scriptDir = (Resolve-Path (Join-Path $cmdDir '..')).Path
 . "${scriptDir}\commands\installer.ps1"
 $configPath = Join-Path $scriptDir "config\\vrcsetup.json"
 
+$script:VpmVersionsCache = @{}
+$script:LastVpmOutput = $null
+
 # Main installer function is provided by commands\installer.ps1 (Start-Installer)
 
 # --- FUNCTIONS ---
@@ -21,7 +24,7 @@ function Initialize-VpmTestProject {
     if (Test-Path ${testProjectPath}) {
         return $testProjectPath
     }
-    Write-Host "Inizializzazione cache validazione VPM (solo prima volta)..." -ForegroundColor Yellow
+    Write-Host "Initializing VPM validation cache (first run)..." -ForegroundColor Yellow
     New-Item -ItemType Directory -Path $testProjectPath -Force | Out-Null
     $packagesPath = Join-Path $testProjectPath "Packages"
     New-Item -ItemType Directory -Path $packagesPath -Force | Out-Null
@@ -29,19 +32,82 @@ function Initialize-VpmTestProject {
     $manifest | ConvertTo-Json -Depth 10 | Set-Content (Join-Path $packagesPath "manifest.json") -Encoding UTF8
     $vpmManifest = @{ dependencies = @{ }; locked = @{ } }
     $vpmManifest | ConvertTo-Json -Depth 10 | Set-Content (Join-Path $packagesPath "vpm-manifest.json") -Encoding UTF8
-    Write-Host "Cache creata in: ${testProjectPath}" -ForegroundColor Green
+    Write-Host "Cache created at: ${testProjectPath}" -ForegroundColor Green
     return $testProjectPath
+}
+
+function Invoke-VpmCapture {
+    param(
+        [string[]]$Args
+    )
+
+    $output = ""
+    try {
+        $output = (& vpm @Args 2>&1 | Out-String)
+    } catch {
+        $output = (${_} | Out-String)
+    }
+
+    return @{ ExitCode = $LASTEXITCODE; Output = $output }
+}
+
+function Get-LastTextLines {
+    param(
+        [string]$Text,
+        [int]$MaxLines = 20
+    )
+    if ([string]::IsNullOrWhiteSpace($Text)) { return "" }
+    $lines = $Text -split "`r?`n"
+    return ($lines | Select-Object -Last $MaxLines) -join "`n"
+}
+
+function Show-WizardError {
+    param(
+        [string]$Title,
+        [string]$Message,
+        [string]$Details
+    )
+    Clear-Host
+    Write-Host $Title -ForegroundColor Red
+    Write-Host "" 
+    if ($Message) { Write-Host $Message -ForegroundColor Yellow }
+    if ($Details) {
+        Write-Host "" 
+        Write-Host "Details (last lines):" -ForegroundColor DarkGray
+        Write-Host $Details -ForegroundColor Gray
+    }
+    Write-Host "" 
+    Read-Host "Press ENTER to continue" | Out-Null
 }
 
 function Test-VpmPackageVersion {
     param([string]$PackageName, [string]$Version, [string]$ScriptDir)
-    if ($Version -eq "latest") { return @{ Valid = $true; Message = "Versione 'latest' sempre valida" } }
-    Write-Host "Validazione ${PackageName}@${Version}..." -ForegroundColor Gray
+
+    if ([string]::IsNullOrWhiteSpace($PackageName)) {
+        return @{ Valid = $false; Message = "Package name is empty" }
+    }
+    if ([string]::IsNullOrWhiteSpace($Version)) {
+        return @{ Valid = $false; Message = "Version is empty" }
+    }
+
+    # Validate existence even for 'latest' (use correct vpm command)
+    if ($Version -eq "latest") {
+        $res = Invoke-VpmCapture -Args @('check', 'package', $PackageName)
+        $script:LastVpmOutput = $res.Output
+        if ($res.ExitCode -eq 0) {
+            return @{ Valid = $true; Message = "Validated with VPM (latest)" }
+        }
+        $tail = Get-LastTextLines -Text $res.Output -MaxLines 25
+        return @{ Valid = $false; Message = "Package not found or not resolvable (latest)"; Details = $tail }
+    }
+
+    Write-Host "Validating ${PackageName}@${Version}..." -ForegroundColor Gray
     $testProject = Initialize-VpmTestProject -ScriptDir $ScriptDir
     try {
         $packageSpec = "${PackageName}@${Version}"
         $output = vpm add package $packageSpec -p $testProject 2>&1 | Out-String
-        if ($output -match "ERR.*Could not get match" -or $output -match "ERR.*not found") {
+        $script:LastVpmOutput = $output
+        if ($LASTEXITCODE -ne 0 -or $output -match "ERR.*Could not get match" -or $output -match "ERR.*not found") {
             $reposPath = "${env:LOCALAPPDATA}\VRChatCreatorCompanion\Repos"
             $availableVersions = @()
             if (Test-Path $reposPath) {
@@ -55,171 +121,518 @@ function Test-VpmPackageVersion {
                     } catch { }
                 }
             }
-            if ($availableVersions.Count -gt 0) {
+                if ($availableVersions.Count -gt 0) {
                 $sortedVersions = $availableVersions | Sort-Object -Descending | Select-Object -First 5
                 $versionList = $sortedVersions -join ", "
-                return @{ Valid = $false; Message = "Versione ${Version} non trovata. Ultime disponibili: ${versionList}" }
+                return @{ Valid = $false; Message = "Version ${Version} not found. Recent versions: ${versionList}" }
             }
-            return @{ Valid = $false; Message = "Versione ${Version} non disponibile" }
+            $tail = Get-LastTextLines -Text $output -MaxLines 25
+            return @{ Valid = $false; Message = "Version ${Version} not available"; Details = $tail }
         }
-        Write-Host "Versione valida!" -ForegroundColor Green
+        Write-Host "Version valid!" -ForegroundColor Green
         vpm remove package $PackageName -p $testProject 2>&1 | Out-Null
         return @{ Valid = $true; Message = "Versione verificata con VPM" }
     } catch {
-        Write-Host "Errore durante validazione: ${_}" -ForegroundColor Red
-        return @{ Valid = $false; Message = "Errore durante validazione VPM" }
+        $script:LastVpmOutput = (${_} | Out-String)
+        return @{ Valid = $false; Message = "VPM validation error"; Details = (Get-LastTextLines -Text $script:LastVpmOutput -MaxLines 25) }
+    }
+}
+
+function Normalize-UserPath {
+    param([string]$Path)
+    if ($null -eq $Path) { return $null }
+    $p = $Path.Trim()
+    $p = $p.Trim('"')
+    $p = $p.Trim("'")
+    return $p
+}
+
+function Get-VpmReposPath {
+    return (Join-Path $env:LOCALAPPDATA "VRChatCreatorCompanion\Repos")
+}
+
+function Ensure-ConfigDefaults {
+    param($Config)
+    if (-not $Config) { return $null }
+
+    if (-not $Config.Naming) {
+        $Config | Add-Member -MemberType NoteProperty -Name "Naming" -Value ([pscustomobject]@{}) -Force
+    }
+
+    if ($null -eq $Config.Naming.DefaultPrefix) { $Config.Naming | Add-Member -MemberType NoteProperty -Name "DefaultPrefix" -Value "" -Force }
+    if ($null -eq $Config.Naming.DefaultSuffix) { $Config.Naming | Add-Member -MemberType NoteProperty -Name "DefaultSuffix" -Value "" -Force }
+    if ($null -eq $Config.Naming.RegexRemovePatterns) { $Config.Naming | Add-Member -MemberType NoteProperty -Name "RegexRemovePatterns" -Value @() -Force }
+    if ($null -eq $Config.Naming.RememberUnityPackageNames) { $Config.Naming | Add-Member -MemberType NoteProperty -Name "RememberUnityPackageNames" -Value $true -Force }
+
+    if (-not $Config.SavedProjectNames) {
+        $Config | Add-Member -MemberType NoteProperty -Name "SavedProjectNames" -Value ([pscustomobject]@{}) -Force
+    }
+
+    return $Config
+}
+
+function Apply-ProjectNamingRules {
+    param(
+        [string]$BaseName,
+        $Config
+    )
+    if ([string]::IsNullOrWhiteSpace($BaseName)) { return $BaseName }
+    if (-not $Config) { return $BaseName }
+
+    $name = $BaseName
+    $cfg = Ensure-ConfigDefaults -Config $Config
+    $patterns = @($cfg.Naming.RegexRemovePatterns)
+    foreach ($pat in $patterns) {
+        if ([string]::IsNullOrWhiteSpace($pat)) { continue }
+        try {
+            $name = ($name -replace $pat, "")
+        } catch {
+            # ignore invalid regex
+        }
+    }
+
+    $name = $name.Trim()
+    $name = ($cfg.Naming.DefaultPrefix + $name + $cfg.Naming.DefaultSuffix).Trim()
+    return $name
+}
+
+function Advanced-NamingSettings {
+    param(
+        [string]$ConfigPath
+    )
+
+    if (-not (Test-Path $ConfigPath)) {
+        Write-Host "Config not found. Run setup first." -ForegroundColor Red
+        Read-Host "Press ENTER to continue"
+        return
+    }
+
+    $config = Load-Config -ConfigPath $ConfigPath
+    $config = Ensure-ConfigDefaults -Config $config
+
+    while ($true) {
+        $patternsCount = @($config.Naming.RegexRemovePatterns).Count
+        $remember = if ($config.Naming.RememberUnityPackageNames) { "ON" } else { "OFF" }
+        $header = "Prefix: '$($config.Naming.DefaultPrefix)'  Suffix: '$($config.Naming.DefaultSuffix)'`nRegex remove patterns: ${patternsCount}`nRemember per-unitypackage names: ${remember}"
+
+        $sel = Show-Menu -Title "Advanced settings" -Header $header -Options @(
+            "Set default prefix",
+            "Set default suffix",
+            "Manage regex remove patterns",
+            "Toggle remember unitypackage names",
+            "Back"
+        )
+
+        if ($sel -eq -1 -or $sel -eq 4) { Save-Config -Config $config -ConfigPath $ConfigPath; return }
+
+        switch ($sel) {
+            0 {
+                $p = Read-Host "Default prefix (blank to clear)"
+                $config.Naming.DefaultPrefix = if ($p) { $p } else { "" }
+                Save-Config -Config $config -ConfigPath $ConfigPath
+            }
+            1 {
+                $s = Read-Host "Default suffix (blank to clear)"
+                $config.Naming.DefaultSuffix = if ($s) { $s } else { "" }
+                Save-Config -Config $config -ConfigPath $ConfigPath
+            }
+            2 {
+                while ($true) {
+                    $patterns = @($config.Naming.RegexRemovePatterns)
+                    $opts = @()
+                    foreach ($pat in $patterns) { $opts += $pat }
+                    $opts += @("Add pattern", "Remove pattern", "Back")
+
+                    $pSel = Show-Menu -Title "Regex remove patterns" -Header "These patterns will be removed from the suggested project name." -Options $opts
+                    if ($pSel -eq -1 -or $opts[$pSel] -eq "Back") { break }
+
+                    if ($opts[$pSel] -eq "Add pattern") {
+                        $newPat = Read-Host "Regex pattern to remove"
+                        if ([string]::IsNullOrWhiteSpace($newPat)) { continue }
+                        try {
+                            [void][regex]::new($newPat)
+                        } catch {
+                            Write-Host "Invalid regex." -ForegroundColor Red
+                            Read-Host "Press ENTER"
+                            continue
+                        }
+                        $config.Naming.RegexRemovePatterns += @($newPat)
+                        Save-Config -Config $config -ConfigPath $ConfigPath
+                        continue
+                    }
+
+                    if ($opts[$pSel] -eq "Remove pattern") {
+                        if ($patterns.Count -eq 0) { continue }
+                        $idx = Show-Menu -Title "Remove which pattern?" -Options $patterns
+                        if ($idx -eq -1) { continue }
+                        $toRemove = $patterns[$idx]
+                        $config.Naming.RegexRemovePatterns = @($patterns | Where-Object { $_ -ne $toRemove })
+                        Save-Config -Config $config -ConfigPath $ConfigPath
+                        continue
+                    }
+                }
+            }
+            3 {
+                $config.Naming.RememberUnityPackageNames = -not $config.Naming.RememberUnityPackageNames
+                Save-Config -Config $config -ConfigPath $ConfigPath
+            }
+        }
+    }
+}
+
+function Get-AllVpmPackageNames {
+    $reposPath = Get-VpmReposPath
+    $names = @()
+    if (Test-Path $reposPath) {
+        Get-ChildItem $reposPath -Filter "*.json" -ErrorAction SilentlyContinue | ForEach-Object {
+            try {
+                $repoData = Get-Content $_.FullName -Raw -ErrorAction SilentlyContinue | ConvertFrom-Json
+                if ($repoData.packages) {
+                    $names += $repoData.packages.PSObject.Properties.Name
+                }
+            } catch { }
+        }
+    }
+    return ($names | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -Unique | Sort-Object)
+}
+
+function Get-VpmAvailableVersions {
+    param([string]$PackageName)
+    if ([string]::IsNullOrWhiteSpace($PackageName)) { return @() }
+
+    if ($script:VpmVersionsCache.ContainsKey($PackageName)) {
+        return $script:VpmVersionsCache[$PackageName]
+    }
+
+    $reposPath = Get-VpmReposPath
+    $available = @()
+    if (Test-Path $reposPath) {
+        Get-ChildItem $reposPath -Filter "*.json" -ErrorAction SilentlyContinue | ForEach-Object {
+            try {
+                $repoData = Get-Content $_.FullName -Raw -ErrorAction SilentlyContinue | ConvertFrom-Json
+                if (${repoData.packages}.${PackageName}) {
+                    $versions = $repoData.packages.$PackageName.versions.PSObject.Properties.Name
+                    if ($versions) {
+                        $available += $versions
+                    }
+                }
+            } catch { }
+        }
+    }
+
+    $available = $available | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -Unique
+    $available = $available | Sort-Object -Descending
+
+    $script:VpmVersionsCache[$PackageName] = @($available)
+    return $script:VpmVersionsCache[$PackageName]
+}
+
+function Test-VpmPackageExists {
+    param([string]$PackageName)
+
+    if ([string]::IsNullOrWhiteSpace($PackageName)) { return $false }
+
+    # Source of truth: VPM itself.
+    $res = Invoke-VpmCapture -Args @('check', 'package', $PackageName)
+    $script:LastVpmOutput = $res.Output
+    if ($res.ExitCode -eq 0) { return $true }
+
+    # Secondary: VPM show (some installs support show better than check).
+    $res2 = Invoke-VpmCapture -Args @('show', 'package', $PackageName)
+    $script:LastVpmOutput = $res2.Output
+    if ($res2.ExitCode -eq 0) { return $true }
+
+    # Fallback: local VCC repos cache (useful for version listing).
+    $versions = Get-VpmAvailableVersions -PackageName $PackageName
+    if ($versions.Count -gt 0) { return $true }
+
+    return $false
+}
+
+function Select-VpmVersion {
+    param(
+        [string]$PackageName,
+        [string]$CurrentVersion
+    )
+
+    $available = Get-VpmAvailableVersions -PackageName $PackageName
+    $header = "Package: ${PackageName}`nCurrent: ${CurrentVersion}`n"
+    if ($available.Count -gt 0) {
+        $header += "Versions found locally: ${($available.Count)} (from VCC repos)`n"
+    } else {
+        $header += "No versions found locally. You can still enter manually.`n"
+    }
+
+    $options = @("latest")
+    $options += ($available | Select-Object -First 20)
+    $options += @("Enter manually", "Back")
+
+    $sel = Show-Menu -Title "Select version" -Header $header -Options $options
+    if ($sel -eq -1) { return $null }
+
+    $picked = $options[$sel]
+    if ($picked -eq "Back") { return $null }
+    if ($picked -eq "Enter manually") {
+        $manual = Read-Host "Version (or 'latest')"
+        if ([string]::IsNullOrWhiteSpace($manual)) { return $null }
+        return $manual.Trim()
+    }
+
+    return $picked
+}
+
+function Edit-VpmPackages {
+    param(
+        [string]$ConfigPath,
+        [string]$ScriptDir
+    )
+
+    if (-not (Test-Path $ConfigPath)) {
+        Write-Host "Config not found. Run setup first." -ForegroundColor Red
+        Read-Host "Press ENTER to continue"
+        return
+    }
+
+    $config = Load-Config -ConfigPath $ConfigPath
+    if (-not $config) {
+        Write-Host "Unable to load config." -ForegroundColor Red
+        Read-Host "Press ENTER to continue"
+        return
+    }
+
+    if ($config.VpmPackages -is [System.Array]) {
+        $newPackages = @{}
+        foreach ($pkg in $config.VpmPackages) { $newPackages[$pkg] = "latest" }
+        $config.VpmPackages = [pscustomobject]$newPackages
+    }
+    if (-not $config.VpmPackages) {
+        $config | Add-Member -MemberType NoteProperty -Name "VpmPackages" -Value ([pscustomobject]@{ "com.vrchat.base" = "latest" }) -Force
+    }
+
+    while ($true) {
+        $packagesList = @($config.VpmPackages.PSObject.Properties) | Sort-Object Name
+        $pkgOptions = @()
+        foreach ($pkg in $packagesList) {
+            $pkgOptions += ("{0}  [{1}]" -f $pkg.Name, $pkg.Value)
+        }
+        $pkgOptions += @("Add package", "Back")
+
+        $header = "Select a package, then choose an action."
+        $selected = Show-Menu -Title "VPM Packages" -Header $header -Options $pkgOptions
+        if ($selected -eq -1) { return }
+
+        $picked = $pkgOptions[$selected]
+        if ($picked -eq "Back") { return }
+
+        if ($picked -eq "Add package") {
+            $allPackages = Get-AllVpmPackageNames
+            $manualOption = "(Enter package name manually)"
+            $opts = @($manualOption) + @($allPackages)
+            $pickedName = Show-MenuFilter \
+                -Title "Add package" \
+                -Header "Type to filter. Enter selects. If no match, Enter uses the typed text." \
+                -Options $opts \
+                -PinnedOptions @($manualOption) \
+                -Placeholder "type package name (e.g. gogoloco, poiyomi)"
+            if ($null -eq $pickedName) { continue }
+
+            $newPackage = $null
+            if ($pickedName -eq $manualOption) {
+                $newPackage = Read-Host "Package name"
+                $newPackage = $newPackage.Trim()
+            } else {
+                $newPackage = $pickedName
+            }
+
+            # If user pressed Enter with zero matches, Show-MenuFilter returns the typed filter string.
+            $newPackage = $newPackage.Trim()
+
+            if ([string]::IsNullOrWhiteSpace($newPackage)) { continue }
+
+            # Make intent clear for the next step
+            Write-Host "Selected package: ${newPackage}" -ForegroundColor Cyan
+
+            if ($config.VpmPackages.PSObject.Properties.Name -contains $newPackage) {
+                Write-Host "Package already present." -ForegroundColor Yellow
+                Start-Sleep -Seconds 1
+                continue
+            }
+
+            if (-not (Test-VpmPackageExists -PackageName $newPackage)) {
+                $tail = Get-LastTextLines -Text $script:LastVpmOutput -MaxLines 25
+                Show-WizardError -Title "Package not found" -Message "Package not found / not resolvable: ${newPackage}" -Details $tail
+                continue
+            }
+
+            $version = Select-VpmVersion -PackageName $newPackage -CurrentVersion "(new)"
+            if ($null -eq $version) { continue }
+
+            $validation = Test-VpmPackageVersion -PackageName $newPackage -Version $version -ScriptDir $ScriptDir
+            if (-not $validation.Valid) {
+                Show-WizardError -Title "Validation failed" -Message $validation.Message -Details $validation.Details
+                continue
+            }
+
+            $config.VpmPackages | Add-Member -MemberType NoteProperty -Name $newPackage -Value $version -Force
+            Save-Config -Config $config -ConfigPath $ConfigPath
+            Write-Host "Package added: ${newPackage} @ ${version}" -ForegroundColor Green
+            Start-Sleep -Seconds 1
+            continue
+        }
+
+        # A real package selected
+        $pkgProp = $packagesList[$selected]
+        $pkgName = $pkgProp.Name
+        $pkgVersion = $pkgProp.Value
+
+        $action = Show-Menu -Title "Package: ${pkgName}" -Header "Current: ${pkgVersion}" -Options @("Change version", "Remove package", "Back")
+        if ($action -eq -1 -or $action -eq 2) { continue }
+
+        if ($action -eq 0) {
+            if (-not (Test-VpmPackageExists -PackageName $pkgName)) {
+                $tail = Get-LastTextLines -Text $script:LastVpmOutput -MaxLines 25
+                Show-WizardError -Title "Package not found" -Message "Package not found / not resolvable: ${pkgName}" -Details $tail
+                continue
+            }
+
+            $newVersion = Select-VpmVersion -PackageName $pkgName -CurrentVersion $pkgVersion
+            if ($null -eq $newVersion) { continue }
+
+            $validation = Test-VpmPackageVersion -PackageName $pkgName -Version $newVersion -ScriptDir $ScriptDir
+            if (-not $validation.Valid) {
+                Show-WizardError -Title "Validation failed" -Message $validation.Message -Details $validation.Details
+                continue
+            }
+
+            $config.VpmPackages.($pkgName) = $newVersion
+            Save-Config -Config $config -ConfigPath $ConfigPath
+            Write-Host "Updated: ${pkgName} @ ${newVersion}" -ForegroundColor Green
+            Start-Sleep -Seconds 1
+            continue
+        }
+
+        if ($action -eq 1) {
+            $confirm = Show-Menu -Title "Remove package" -Header "Remove ${pkgName}?" -Options @("Yes, remove", "Cancel") -AllowCancel $false
+            if ($confirm -eq 0) {
+                $config.VpmPackages.PSObject.Properties.Remove($pkgName)
+                Save-Config -Config $config -ConfigPath $ConfigPath
+                Write-Host "Removed: ${pkgName}" -ForegroundColor Green
+                Start-Sleep -Seconds 1
+            }
+            continue
+        }
+    }
+}
+
+function Setup-ProjectFlow {
+    param([string]$ConfigPath)
+
+    $setupChoice = Show-Menu -Title "Setup project" -Header "Choose what you're starting from:" -Options @(
+        "UnityPackage (.unitypackage) -> create new project",
+        "Existing Unity project folder",
+        "Back"
+    )
+
+    if ($setupChoice -eq -1 -or $setupChoice -eq 2) { return }
+
+    $config = $null
+    if (Test-Path $ConfigPath) { $config = Load-Config -ConfigPath $ConfigPath }
+    if ($config) { $config = Ensure-ConfigDefaults -Config $config }
+
+    if ($setupChoice -eq 0) {
+        Write-Host "Drag here the .unitypackage file (or paste the full path):" -ForegroundColor Yellow
+        $packagePath = Normalize-UserPath (Read-Host "UnityPackage path")
+        if ([string]::IsNullOrWhiteSpace($packagePath)) { return }
+        if (-not (Test-Path $packagePath)) { Write-Host "Path not found: ${packagePath}" -ForegroundColor Red; Read-Host "Press ENTER"; return }
+        if ($packagePath -notlike "*.unitypackage") { Write-Host "Must be a .unitypackage file." -ForegroundColor Red; Read-Host "Press ENTER"; return }
+
+        $rawDefault = [System.IO.Path]::GetFileNameWithoutExtension($packagePath)
+        $defaultName = Apply-ProjectNamingRules -BaseName $rawDefault -Config $config
+
+        $savedName = $null
+        if ($config -and $config.SavedProjectNames -and $config.SavedProjectNames.PSObject.Properties.Name -contains $packagePath) {
+            $savedName = $config.SavedProjectNames.($packagePath)
+        }
+
+        $hint = if ($savedName) { "saved = ${savedName}" } elseif ($config -and $config.LastProjectName) { "last = $($config.LastProjectName)" } else { $null }
+        $prompt = if ($hint) { "Project name (ENTER = ${defaultName}, ${hint})" } else { "Project name (ENTER = ${defaultName})" }
+
+        $projectName = (Read-Host $prompt)
+        if ([string]::IsNullOrWhiteSpace($projectName)) { $projectName = if ($savedName) { $savedName } else { $defaultName } } else { $projectName = $projectName.Trim() }
+
+        $confirmHeader = "UnityPackage: ${packagePath}`nProject name: ${projectName}`n\nProceed?"
+        $confirm = Show-Menu -Title "Confirm" -Header $confirmHeader -Options @("Proceed", "Cancel") -AllowCancel $false
+        if ($confirm -ne 0) { return }
+
+        if ($config) {
+            $config | Add-Member -MemberType NoteProperty -Name "LastProjectName" -Value $projectName -Force
+            $config | Add-Member -MemberType NoteProperty -Name "LastUnityPackagePath" -Value $packagePath -Force
+            if ($config.Naming.RememberUnityPackageNames) {
+                $config.SavedProjectNames | Add-Member -MemberType NoteProperty -Name $packagePath -Value $projectName -Force
+            }
+            Save-Config -Config $config -ConfigPath $ConfigPath
+        }
+
+        Start-Installer -projectPath $packagePath -NewProjectName $projectName
+        Read-Host "Press ENTER to return"
+        return
+    }
+
+    if ($setupChoice -eq 1) {
+        Write-Host "Drag here the Unity project folder (or paste the path):" -ForegroundColor Yellow
+        $projectPath = Normalize-UserPath (Read-Host "Project path")
+        if ([string]::IsNullOrWhiteSpace($projectPath)) { return }
+        if (-not (Test-Path $projectPath)) { Write-Host "Path not found: ${projectPath}" -ForegroundColor Red; Read-Host "Press ENTER"; return }
+
+        $assetsPath = Join-Path $projectPath "Assets"
+        if (-not (Test-Path $assetsPath)) { Write-Host "Not a Unity project (missing Assets)." -ForegroundColor Red; Read-Host "Press ENTER"; return }
+
+        $confirmHeader = "Project folder: ${projectPath}`n\nProceed?"
+        $confirm = Show-Menu -Title "Confirm" -Header $confirmHeader -Options @("Proceed", "Cancel") -AllowCancel $false
+        if ($confirm -ne 0) { return }
+
+        Start-Installer -projectPath $projectPath
+        Read-Host "Press ENTER to return"
+        return
     }
 }
 
 # --- Main launcher for interactive wizard ---
 function Start-Wizard {
-    # Header
-    Write-Host "`n================================" -ForegroundColor Cyan
-    Write-Host "   VRChat Project Setup Wizard" -ForegroundColor Cyan
-    Write-Host "================================`n" -ForegroundColor Cyan
-
-    # Verify main installer exists
-    if (-not (Test-Path $vrcsetupScript)) {
-        Write-Host "Error: main installer (${vrcsetupScript}) not found" -ForegroundColor Red
-        Read-Host "Press ENTER to exit"
-        exit 1
-    }
-
-    # Menu loop (copied from original wizard)
     while ($true) {
-        Clear-Host
-        Write-Host "`nWhat do you want to do?" -ForegroundColor Yellow
-        Write-Host "  1) Create new project from UnityPackage" -ForegroundColor White
-        Write-Host "  2) Setup VRChat on existing project" -ForegroundColor White
-        Write-Host "  3) Configure VPM packages" -ForegroundColor White
-        Write-Host "  4) Reset configuration" -ForegroundColor White
-        Write-Host "  5) Exit" -ForegroundColor White
-        Write-Host ""
+        $header = "Use arrows + Enter. ESC cancels." 
+        $choice = Show-Menu -Title "VRChat Project Setup Wizard" -Header $header -Options @(
+            "Setup project (UnityPackage or existing)",
+            "Configure VPM packages",
+            "Advanced settings",
+            "Reset configuration",
+            "Exit"
+        )
 
-        $choice = Read-Host "Choice [1-5]"
-        if ([string]::IsNullOrWhiteSpace($choice)) { continue }
+        if ($choice -eq -1) { continue }
 
         switch ($choice) {
-            "1" {
-                Clear-Host
-                Write-Host "`n--- Create new project from UnityPackage ---" -ForegroundColor Cyan
-                Write-Host "Drag here the .unitypackage file (or paste the full path):" -ForegroundColor Yellow
-                Write-Host "(Press ENTER to cancel)" -ForegroundColor Gray
-                $packagePath = Read-Host "Path UnityPackage"
-                    Start-Installer -projectPath $packagePath
-                $packagePath = $packagePath.Trim('"')
-                if (-not (Test-Path $packagePath)) { Write-Host "`nError: file not found!" -ForegroundColor Red; Read-Host "Press ENTER to continue"; Clear-Host; continue }
-                if ($packagePath -notlike "*.unitypackage") { Write-Host "`nError: the file must be a .unitypackage!" -ForegroundColor Red; Read-Host "Press ENTER to continue"; Clear-Host; continue }
-                Write-Host "`nStarting project creation..." -ForegroundColor Green
-                Start-Installer -projectPath $packagePath
-                Write-Host "`n--- Operation completed ---" -ForegroundColor Green
-                Read-Host "Press ENTER to return to the menu"; Clear-Host
+            0 {
+                Setup-ProjectFlow -ConfigPath $configPath
             }
-
-            "2" {
-                Clear-Host
-                Write-Host "`n--- Setup VRChat on existing project ---" -ForegroundColor Cyan
-                Write-Host "Drag here the Unity project folder (or paste the path):" -ForegroundColor Yellow
-                Write-Host "(Press ENTER to cancel)" -ForegroundColor Gray
-                $projectPath = Read-Host "Project Path"
-                if ([string]::IsNullOrWhiteSpace($projectPath)) { Write-Host "Operation canceled." -ForegroundColor Yellow; Start-Sleep -Seconds 1; continue }
-                    Start-Installer -projectPath $projectPath
-                if (-not (Test-Path $projectPath)) { Write-Host "`nError: folder not found!" -ForegroundColor Red; Read-Host "Press ENTER to continue"; Clear-Host; continue }
-                $assetsPath = Join-Path $projectPath "Assets"
-                if (-not (Test-Path $assetsPath)) { Write-Host "`nError: not a Unity project (missing Assets)!" -ForegroundColor Red; Read-Host "Press ENTER to continue"; Clear-Host; continue }
-                Write-Host "`nStarting VRChat setup..." -ForegroundColor Green
-                Start-Installer -projectPath $projectPath
-                Write-Host "`n--- Operation completed ---" -ForegroundColor Green
-                Read-Host "Press ENTER to return to the menu"; Clear-Host
+            1 {
+                Edit-VpmPackages -ConfigPath $configPath -ScriptDir $scriptDir
             }
-
-            "3" {
-                # Config VPM packages
-                        Start-Installer -projectPath "-reset"; Read-Host "Press ENTER to continue"
-                if (-not (Test-Path $configPath)) { Write-Host "`nError: initialize a project first to create the configuration!" -ForegroundColor Red; Read-Host "Press ENTER to continue"; Clear-Host; continue }
-                $config = Load-Config -ConfigPath $configPath
-                if ($config.VpmPackages -is [System.Array]) { $newPackages = @{}; foreach ($pkg in $config.VpmPackages) { $newPackages[$pkg] = "latest" }; $config.VpmPackages = $newPackages }
-                if (-not $config.VpmPackages) { $config | Add-Member -MemberType NoteProperty -Name "VpmPackages" -Value @{ "com.vrchat.base" = "latest" } }
-                $exitVpmMenu = $false
-                while (-not $exitVpmMenu) {
-                    $packagesList = @($config.VpmPackages.PSObject.Properties)
-                    $options = @( "A) Add package", "M) Modify package version", "R) Remove package", "S) Save and return" )
-                    $headerLines = ""
-                    $idx = 0
-                    foreach ($pkg in $packagesList) { $idx++; $headerLines += ("  {0}) {1} - {2}`n" -f $idx, $pkg.Name, $pkg.Value) }
-                    $selected = Show-Menu -Title '--- VPM Packages configuration ---' -Header $headerLines -Options $options
-                    if ($selected -eq -1) { Write-Host "`nOperation canceled." -ForegroundColor Yellow; Start-Sleep -Seconds 1; continue }
-                    $vpmChoice = @("A","M","R","S")[$selected]
-                    switch ($vpmChoice) {
-                        "A" {
-                            Write-Host "`nInsert package name to add:" -ForegroundColor Yellow
-                            $newPackage = Read-Host "Package name"
-                            if ([string]::IsNullOrWhiteSpace($newPackage)) { Write-Host "Package name empty, canceled." -ForegroundColor Yellow; continue }
-                            if ($config.VpmPackages.PSObject.Properties.Name -contains $newPackage) { Write-Host "Package already present!" -ForegroundColor Yellow; continue }
-                            Write-Host "Insert the version or 'latest':" -ForegroundColor Yellow
-                            $newVersion = Read-Host "Version"
-                            if ([string]::IsNullOrWhiteSpace($newVersion)) { $newVersion = "latest"; Write-Host "No version specified, using 'latest'" -ForegroundColor Gray }
-                            $validation = Test-VpmPackageVersion -PackageName $newPackage -Version $newVersion -ScriptDir $scriptDir
-                            if ($validation.Valid) { $config.VpmPackages | Add-Member -MemberType NoteProperty -Name $newPackage -Value $newVersion -Force; Write-Host "Package added: ${newPackage} - ${newVersion}" -ForegroundColor Green; Write-Host "($($validation.Message))" -ForegroundColor Gray } else { Write-Host "Error: $($validation.Message)" -ForegroundColor Red; Write-Host "Package not added." -ForegroundColor Yellow }
-                        }
-                        "M" {
-                            $packagesList = @($config.VpmPackages.PSObject.Properties)
-                            if ($packagesList.Count -eq 0) { Write-Host "`nNo package to modify!" -ForegroundColor Yellow; continue }
-                            $pkgOptions = $packagesList | ForEach-Object { "{0} - {1}" -f $_.Name, $_.Value }
-                            $selectedPkg = Show-Menu -Title 'Select a package to modify:' -Options $pkgOptions -AllowCancel $true
-                            if ($selectedPkg -eq -1) { Write-Host "`nOperation canceled." -ForegroundColor Yellow; Start-Sleep -Seconds 1; continue }
-                            $pkgToModify = $packagesList[$selectedPkg]
-                            Write-Host "`nSelected package: ${($pkgToModify.Name)} (current version: ${($pkgToModify.Value)})" -ForegroundColor Cyan
-                            Write-Host "Enter new version (Press ENTER to cancel)" -ForegroundColor Gray
-                            $newVersion = Read-Host "New version"
-                            if ([string]::IsNullOrWhiteSpace($newVersion)) { Write-Host "Operation canceled." -ForegroundColor Yellow; continue }
-                            $validation = Test-VpmPackageVersion -PackageName $pkgToModify.Name -Version $newVersion -ScriptDir $scriptDir
-                            if ($validation.Valid) { $config.VpmPackages.($pkgToModify.Name) = $newVersion; Write-Host "Version updated: ${($pkgToModify.Name)} - ${newVersion}" -ForegroundColor Green; Write-Host "($($validation.Message))" -ForegroundColor Gray } else { Write-Host "Error: $($validation.Message)" -ForegroundColor Red; Write-Host "Modification canceled." -ForegroundColor Yellow }
-                        }
-                        "R" {
-                            $packagesList = @($config.VpmPackages.PSObject.Properties)
-                            if ($packagesList.Count -eq 0) { Write-Host "`nNo package to remove!" -ForegroundColor Yellow; continue }
-                            $pkgOptions = $packagesList | ForEach-Object { "{0} - {1}" -f $_.Name, $_.Value }
-                            $selectedPkgRemove = Show-Menu -Title 'Select a package to remove:' -Options $pkgOptions -AllowCancel $true
-                            if ($selectedPkgRemove -eq -1) { Write-Host "`nOperation canceled." -ForegroundColor Yellow; Start-Sleep -Seconds 1; continue }
-                            $removed = $packagesList[$selectedPkgRemove]
-                            $config.VpmPackages.PSObject.Properties.Remove($removed.Name)
-                            Write-Host "Package removed: ${($removed.Name)}" -ForegroundColor Green
-                        }
-                        "S" {
-                            $configData = @{ UnityProjectsRoot = $config.UnityProjectsRoot; UnityEditorPath = $config.UnityEditorPath; VpmPackages = $config.VpmPackages }
-                            Save-Config -Config $configData -ConfigPath $configPath
-                            Write-Host "`nConfiguration saved successfully!" -ForegroundColor Green
-                            Start-Sleep -Seconds 1
-                            $exitVpmMenu = $true
-                        }
-                        default { Write-Host "Invalid choice" -ForegroundColor Red }
-                    }
+            2 {
+                Advanced-NamingSettings -ConfigPath $configPath
+            }
+            3 {
+                $confirm = Show-Menu -Title "Reset configuration" -Header "Reset config file?" -Options @("Yes, reset", "Cancel") -AllowCancel $false
+                if ($confirm -eq 0) {
+                    Start-Installer -projectPath "-reset"
+                    Read-Host "Press ENTER to continue"
                 }
-                Read-Host "`nPress ENTER to return to main menu"
-                Clear-Host
             }
-
-            "4" {
-                Clear-Host
-                Write-Host "`n--- Reset configuration ---" -ForegroundColor Cyan
-                Write-Host "Are you sure you want to reset the configuration?" -ForegroundColor Yellow
-                Write-Host "(Press ENTER to cancel)" -ForegroundColor Gray
-                $confirm = Read-Host "Confirm [y/n]"
-                if ([string]::IsNullOrWhiteSpace($confirm) -or $confirm.ToLower() -ne "y") { Write-Host "Reset canceled." -ForegroundColor Gray; Start-Sleep -Seconds 1 } else { Start-Installer -projectPath "-reset"; Read-Host "Press ENTER to continue" }
+            4 {
+                Write-Host "Goodbye!" -ForegroundColor Cyan
+                return
             }
-
-            "5" { Write-Host "`nGoodbye! :)" -ForegroundColor Cyan; exit 0 }
-            default { Write-Host "`nInvalid choice, try again." -ForegroundColor Red; Start-Sleep -Seconds 1 }
         }
     }
 }
 
-if ($MyInvocation.InvocationName -ne '') { Start-Wizard }
-
-# Default: run the wizard if the script is invoked directly
-if ($MyInvocation.InvocationName -ne '') { 
-    # the script runs its interactive menu on invocation
-}
-
-Export-ModuleMember -Function Start-Wizard

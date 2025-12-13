@@ -53,4 +53,3 @@ function Show-ProcessProgress {
     return @{ Elapsed = $elapsedStr; Cpu = $cpuPercent; MemoryMB = $memoryMB; ExitCode = $Process.ExitCode }
 }
 
-Export-ModuleMember -Function Show-ProcessProgress

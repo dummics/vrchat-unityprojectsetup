@@ -8,7 +8,7 @@ function Install-NUnitPackage {
     $manifestPath = Join-Path $ProjectPath "Packages\manifest.json"
 
     if (-not (Test-Path $manifestPath)) {
-        Write-Host "Warning: manifest.json non trovato, skip NUnit" -ForegroundColor Yellow
+        Write-Host "Warning: manifest.json not found, skipping NUnit" -ForegroundColor Yellow
         return
     }
 
@@ -17,11 +17,11 @@ function Install-NUnitPackage {
 
         # Check se NUnit è già presente
         if ($manifest.dependencies.PSObject.Properties.Name -contains "com.unity.test-framework") {
-            Write-Host "NUnit Test Framework già presente" -ForegroundColor Gray
+            Write-Host "NUnit Test Framework already present" -ForegroundColor Gray
             return
         }
 
-        Write-Host "Aggiunta NUnit Test Framework (richiesto da VRChat SDK)..." -ForegroundColor Cyan
+        Write-Host "Adding NUnit Test Framework (required by VRChat SDK)..." -ForegroundColor Cyan
         if ($Test) {
             Write-Host "[TEST] Would add com.unity.test-framework @ 1.1.33" -ForegroundColor DarkGray
             Add-Content -Path $global:VRCSETUP_LOGFILE -Value "[TEST] Would add com.unity.test-framework @ 1.1.33 to ${ProjectPath}"
@@ -33,10 +33,9 @@ function Install-NUnitPackage {
         # Salva manifest
         $manifest | ConvertTo-Json -Depth 10 | Set-Content $manifestPath -Encoding UTF8
 
-        Write-Host "NUnit Test Framework aggiunto!" -ForegroundColor Green
+        Write-Host "NUnit Test Framework added!" -ForegroundColor Green
     } catch {
-        Write-Host "Warning: impossibile aggiungere NUnit automaticamente: ${_}" -ForegroundColor Yellow
+        Write-Host "Warning: unable to automatically add NUnit: ${_}" -ForegroundColor Yellow
     }
 }
 
-Export-ModuleMember -Function Install-NUnitPackage
