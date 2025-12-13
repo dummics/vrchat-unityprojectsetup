@@ -292,12 +292,13 @@ function Edit-VpmPackages {
             if (($allPackages.Count -eq 0) -and (-not $hasVrcGet)) {
                 $hint += "`nTip: put vrc-get .exe under setup-scripts/lib/vrc-get/ to enable search."
             }
-            $pickedName = Show-MenuFilter \
-                -Title "Add package" \
-                -Header $hint \
-                -Options $opts \
-                -PinnedOptions $pinned \
-                -Placeholder "type package name (e.g. gogoloco, poiyomi)"
+            $pickedName = Show-MenuFilter @{
+                Title         = "Add package"
+                Header        = $hint
+                Options       = $opts
+                PinnedOptions = $pinned
+                Placeholder   = "type package name (e.g. gogoloco, poiyomi)"
+            }
             if ($null -eq $pickedName) { continue }
 
             $newPackage = $null
@@ -322,11 +323,12 @@ function Edit-VpmPackages {
                     }
                 }
 
-                $pickStr = Show-MenuFilter \
-                    -Title "Search results" \
-                    -Header "Select a package from vrc-get search results." \
-                    -Options $displayOptions \
-                    -Placeholder "type to filter results"
+                $pickStr = Show-MenuFilter @{
+                    Title       = "Search results"
+                    Header      = "Select a package from vrc-get search results."
+                    Options     = $displayOptions
+                    Placeholder = "type to filter results"
+                }
 
                 if ($null -eq $pickStr) { continue }
 

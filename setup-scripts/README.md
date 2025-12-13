@@ -12,6 +12,7 @@ Wizard UX notes:
 - Main menu uses arrow-key selection.
 - "Setup project" is unified: choose UnityPackage or existing project.
 - VPM packages editor is 2-step: select package → choose action (change version/remove), plus add package (type-to-filter).
+- Bugfix: "Add package" no longer throws and instantly returns to the list.
 - Advanced settings includes naming rules (prefix/suffix/regex remove) and per-unitypackage remembered project names.
 
 Optional tooling:
