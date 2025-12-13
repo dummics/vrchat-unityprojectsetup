@@ -6,7 +6,11 @@ Structure:
 - `commands/installer.ps1`: `Start-Installer` + helpers (UnityPackage create/import + VPM install).
 - `commands/wizard.ps1`: `Start-Wizard` logic and menu.
 - `lib/`: shared helpers: menu, config, progress, utils.
-- `config/`: configuration and JSON files (vrcsetup.json, vrcsetup.lock.json).
+- `config/`: configuration templates + local config.
+	- `vrcsetup.defaults` is tracked in repo and used as the first-run seed.
+	- `vrcsetup.json` is generated on first run (or by the wizard), is local-only and gitignored (it contains local paths).
+	- If the template is missing, the script generates a minimal skeleton config.
+	- `unity-test-framework.dependencies.json` is tracked and provides the Unity Test Framework dependency snippet.
 
 Wizard UX notes:
 - Main menu uses arrow-key selection.
@@ -19,8 +23,12 @@ Wizard UX notes:
 - Bugfix: "Add package" no longer throws and instantly returns to the list.
 - Versions list is SemVer-sorted (e.g. 0.1.29 > 0.1.9).
 - Version picker supports paging + filter patterns (e.g. *.9, X.X.1190, or re:<regex>).
-- In paged lists, use  to change page quickly.
+- In paged lists, use Left/Right to change page.
 - Advanced settings includes naming rules (prefix/suffix/regex remove) and per-unitypackage remembered project names.
+- UnityPackage extra-import folder is configurable (Advanced settings):
+	- Config key: `UnityPackagesFolder`
+	- By default it's DISABLED (no extra imports).
+	- If set, the installer will also import every `*.unitypackage` found in that folder (besides the one you selected).
 
 Optional tooling:
 - If a local `vrc-get` exe is present, the wizard can search packages and list versions even when the local VCC repos cache is empty.

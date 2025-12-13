@@ -16,7 +16,10 @@ _unityprojectsetup/
     ├── setup.bat               # Batch wrapper for the wizard
     ├── commands/               # Wizard + installer commands
     ├── lib/                    # Shared helpers (menu/config/progress/utils)
-    └── config/vrcsetup.json    # Configuration (generated/edited via wizard)
+    └── config/                 # Defaults (tracked) + local config (gitignored)
+
+Note: on first run, `setup-scripts/config/vrcsetup.json` is created from `setup-scripts/config/vrcsetup.defaults`.
+If the template is missing, the script generates a minimal skeleton config.
 ```
 
 ## 🚀 Quickstart
@@ -70,7 +73,8 @@ Example config snippet:
         "com.vrcfury.vrcfury": "latest"
     },
     "UnityEditorPath": "C:\\Program Files\\Unity\\Hub\\Editor\\2022.3.22f1\\Editor\\Unity.exe",
-    "UnityProjectsRoot": "F:\\UNITY PROJECTS"
+    "UnityProjectsRoot": "F:\\UNITY PROJECTS",
+    "UnityPackagesFolder": "E:\\UnityPackages"
 }
 ```
 
@@ -112,6 +116,9 @@ Older config files that used a simple array of package names are migrated automa
 - The script integrates with Unity via the editor path configured in `setup-scripts/config/vrcsetup.json`.
 - Drag & drop inputs often include quotes; paths are normalized automatically.
 - UnityPackage mode lets you override the project name; the wizard remembers the last one.
+- `UnityPackagesFolder` (optional) controls where the installer looks for extra `*.unitypackage` files to auto-import when creating a project from a UnityPackage.
+    - If it's a relative path, it's resolved from the repo workspace root.
+    - When missing/empty, extra-imports are DISABLED.
 - Ensure PowerShell execution policies and system permissions allow the script to invoke Unity and modify project files.
 
 ### 🔍 Test mode, backups & logs

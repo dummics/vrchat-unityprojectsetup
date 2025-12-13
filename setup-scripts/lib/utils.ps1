@@ -21,14 +21,34 @@ function Install-NUnitPackage {
             return
         }
 
+        $testFrameworkVersion = "1.1.33"
+        try {
+            $utilsDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+            $scriptDir = (Resolve-Path (Join-Path $utilsDir '..')).Path
+            $depsPath = Join-Path $scriptDir "config\\unity-test-framework.dependencies.json"
+            if (-not (Test-Path $depsPath)) {
+                # Back-compat (older name)
+                $depsPath = Join-Path $scriptDir "config\\vrcsetup.lock.json"
+            }
+
+            if (Test-Path $depsPath) {
+                $deps = Get-Content $depsPath -Raw | ConvertFrom-Json
+                if ($deps -and $deps.dependencies -and ($deps.dependencies.PSObject.Properties.Name -contains 'com.unity.test-framework')) {
+                    $testFrameworkVersion = [string]$deps.dependencies.'com.unity.test-framework'
+                }
+            }
+        } catch {
+            # ignore and keep fallback
+        }
+
         Write-Host "Adding NUnit Test Framework (required by VRChat SDK)..." -ForegroundColor Cyan
         if ($Test) {
-            Write-Host "[TEST] Would add com.unity.test-framework @ 1.1.33" -ForegroundColor DarkGray
-            Add-Content -Path $global:VRCSETUP_LOGFILE -Value "[TEST] Would add com.unity.test-framework @ 1.1.33 to ${ProjectPath}"
+            Write-Host "[TEST] Would add com.unity.test-framework @ ${testFrameworkVersion}" -ForegroundColor DarkGray
+            Add-Content -Path $global:VRCSETUP_LOGFILE -Value "[TEST] Would add com.unity.test-framework @ ${testFrameworkVersion} to ${ProjectPath}"
             return
         }
         # Aggiungi NUnit
-        $manifest.dependencies | Add-Member -MemberType NoteProperty -Name "com.unity.test-framework" -Value "1.1.33" -Force
+        $manifest.dependencies | Add-Member -MemberType NoteProperty -Name "com.unity.test-framework" -Value $testFrameworkVersion -Force
 
         # Salva manifest
         $manifest | ConvertTo-Json -Depth 10 | Set-Content $manifestPath -Encoding UTF8

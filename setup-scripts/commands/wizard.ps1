@@ -13,6 +13,8 @@ $scriptDir = (Resolve-Path (Join-Path $cmdDir '..')).Path
 . "${scriptDir}\lib\vrcget.ps1"
 . "${scriptDir}\commands\installer.ps1"
 $configPath = Join-Path $scriptDir "config\\vrcsetup.json"
+$defaultsPath = Join-Path $scriptDir "config\\vrcsetup.defaults"
+[void](Initialize-ConfigIfMissing -ConfigPath $configPath -DefaultsPath $defaultsPath)
 
 # Main installer function is provided by commands\installer.ps1 (Start-Installer)
 
@@ -74,6 +76,12 @@ function Ensure-ConfigDefaults {
         $Config | Add-Member -MemberType NoteProperty -Name "SavedProjectNames" -Value ([pscustomobject]@{}) -Force
     }
 
+    if ($null -eq $Config.UnityPackagesFolder) {
+        # Optional: when set, installer imports all *.unitypackage found in that folder (in addition to the selected one).
+        # When not set, extra-imports are disabled.
+        $Config | Add-Member -MemberType NoteProperty -Name "UnityPackagesFolder" -Value $null -Force
+    }
+
     return $Config
 }
 
@@ -119,17 +127,33 @@ function Advanced-NamingSettings {
     while ($true) {
         $patternsCount = @($config.Naming.RegexRemovePatterns).Count
         $remember = if ($config.Naming.RememberUnityPackageNames) { "ON" } else { "OFF" }
-        $header = "Prefix: '$($config.Naming.DefaultPrefix)'  Suffix: '$($config.Naming.DefaultSuffix)'`nRegex remove patterns: ${patternsCount}`nRemember per-unitypackage names: ${remember}"
+        $workspaceRoot = (Resolve-Path (Join-Path $scriptDir '..\..')).Path
+        $commonPackagesStatus = 'DISABLED'
+        if ($config -and -not [string]::IsNullOrWhiteSpace([string]$config.UnityPackagesFolder)) {
+            $cfgCommon = ([string]$config.UnityPackagesFolder).Trim().Trim('"').Trim("'")
+            if ([System.IO.Path]::IsPathRooted($cfgCommon)) {
+                $commonPackagesStatus = $cfgCommon
+            } else {
+                $commonPackagesStatus = Join-Path $workspaceRoot $cfgCommon
+            }
+        }
 
-        $sel = Show-Menu -Title "Advanced settings" -Header $header -Options @(
-            "Set default prefix",
-            "Set default suffix",
-            "Manage regex remove patterns",
-            "Toggle remember unitypackage names",
+        $optPrefix = "Prefix: '$($config.Naming.DefaultPrefix)'"
+        $optSuffix = "Suffix: '$($config.Naming.DefaultSuffix)'"
+        $optRegex = "Regex remove patterns: ${patternsCount}"
+        $optRemember = "Remember unitypackage names: ${remember}"
+        $optUnityPackages = "UnityPackages folder (extra imports): ${commonPackagesStatus}"
+
+        $sel = Show-Menu -Title "Advanced settings" -Header "Edit your defaults. Enter to select." -Options @(
+            $optPrefix,
+            $optSuffix,
+            $optRegex,
+            $optRemember,
+            $optUnityPackages,
             "Back"
         )
 
-        if ($sel -eq -1 -or $sel -eq 4) { Save-Config -Config $config -ConfigPath $ConfigPath; return }
+        if ($sel -eq -1 -or $sel -eq 5) { Save-Config -Config $config -ConfigPath $ConfigPath; return }
 
         switch ($sel) {
             0 {
@@ -180,6 +204,45 @@ function Advanced-NamingSettings {
             }
             3 {
                 $config.Naming.RememberUnityPackageNames = -not $config.Naming.RememberUnityPackageNames
+                Save-Config -Config $config -ConfigPath $ConfigPath
+            }
+            4 {
+                Clear-Host
+                Write-Host "UnityPackages folder (extra imports)" -ForegroundColor Cyan
+                Write-Host "" 
+                Write-Host "When you create a project from a UnityPackage, the installer can also import all *.unitypackage found in this folder." -ForegroundColor Gray
+                Write-Host "Current: ${commonPackagesStatus}" -ForegroundColor DarkGray
+                Write-Host "" 
+                Write-Host "Paste/drag a folder path. Type 'disable' (or 'none' / 'clear') to turn it off." -ForegroundColor Yellow
+
+                $inputPath = Normalize-UserPath (Read-Host "Folder path")
+                if ([string]::IsNullOrWhiteSpace($inputPath)) { continue }
+
+                if ($inputPath -ieq 'disable' -or $inputPath -ieq 'none' -or $inputPath -ieq 'clear') {
+                    $config.UnityPackagesFolder = $null
+                    Save-Config -Config $config -ConfigPath $ConfigPath
+                    continue
+                }
+
+                $resolved = $inputPath
+                if (-not [System.IO.Path]::IsPathRooted($resolved)) {
+                    $resolved = Join-Path $workspaceRoot $resolved
+                }
+
+                if (-not (Test-Path $resolved)) {
+                    $create = Show-Menu -Title "Folder not found" -Header "Create folder?`n${resolved}" -Options @("Create", "Cancel") -AllowCancel $false
+                    if ($create -ne 0) { continue }
+                    try {
+                        New-Item -Path $resolved -ItemType Directory -Force | Out-Null
+                    } catch {
+                        Write-Host "Failed to create folder: ${_}" -ForegroundColor Red
+                        Read-Host "Press ENTER" | Out-Null
+                        continue
+                    }
+                }
+
+                # Persist the raw value the user typed (absolute or relative). Installer resolves relative paths from workspace root.
+                $config.UnityPackagesFolder = $inputPath
                 Save-Config -Config $config -ConfigPath $ConfigPath
             }
         }

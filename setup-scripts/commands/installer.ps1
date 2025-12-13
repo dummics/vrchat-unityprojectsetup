@@ -87,6 +87,8 @@ function Start-Installer {
     if (-not (Test-Path $logDir)) { New-Item -Path $logDir -ItemType Directory -Force | Out-Null }
     $global:VRCSETUP_LOGFILE = Join-Path $logDir "vrcsetup-$(Get-Date -Format 'yyyyMMdd-HHmmss').log"
     $configPath = Join-Path $scriptDir "config\\vrcsetup.json"
+    $defaultsPath = Join-Path $scriptDir "config\\vrcsetup.defaults"
+    [void](Initialize-ConfigIfMissing -ConfigPath $configPath -DefaultsPath $defaultsPath)
 
     # Normalize path input (drag&drop often wraps in quotes)
     if ($null -ne $projectPath) {
@@ -182,8 +184,20 @@ function Start-Installer {
             $packagesToImport = @($projectPath)
 
             $workspaceRoot = (Resolve-Path (Join-Path $scriptDir '..\..')).Path
-            $commonPackagesPath = Join-Path $workspaceRoot "_unitypackages"
-            if (Test-Path $commonPackagesPath) {
+            $commonPackagesPath = $null
+            if ($config -and ($config.PSObject.Properties.Name -contains 'UnityPackagesFolder')) {
+                $cfgCommon = [string]$config.UnityPackagesFolder
+                if (-not [string]::IsNullOrWhiteSpace($cfgCommon)) {
+                    $cfgCommon = $cfgCommon.Trim().Trim('"').Trim("'")
+                    if ([System.IO.Path]::IsPathRooted($cfgCommon)) {
+                        $commonPackagesPath = $cfgCommon
+                    } else {
+                        $commonPackagesPath = Join-Path $workspaceRoot $cfgCommon
+                    }
+                }
+            }
+
+            if ($commonPackagesPath -and (Test-Path $commonPackagesPath)) {
                 $commonPackages = Get-ChildItem -Path $commonPackagesPath -Filter "*.unitypackage" -ErrorAction SilentlyContinue
                 foreach ($pkg in $commonPackages) {
                     if ($pkg.FullName -ne $projectPath) {

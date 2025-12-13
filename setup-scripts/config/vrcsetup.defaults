@@ -1,0 +1,19 @@
+{
+  "VpmPackages": {
+    "com.vrchat.base": "latest",
+    "com.vrchat.avatars": "latest",
+    "com.vrchat.core.vpm-resolver": "latest"
+  },
+  "UnityEditorPath": "",
+  "UnityProjectsRoot": "",
+  "Naming": {
+    "DefaultPrefix": "",
+    "DefaultSuffix": "",
+    "RegexRemovePatterns": [],
+    "RememberUnityPackageNames": true
+  },
+  "SavedProjectNames": {},
+  "LastProjectName": "",
+  "LastUnityPackagePath": "",
+  "UnityPackagesFolder": null
+}

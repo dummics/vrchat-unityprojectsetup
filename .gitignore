@@ -1,2 +1,5 @@
 **/logs
 **\setup-scripts\archive\legacy
+
+# User-generated config (contains local paths)
+setup-scripts/config/vrcsetup.json
