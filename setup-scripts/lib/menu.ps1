@@ -26,9 +26,42 @@ function Get-TuiTheme {
         OptionFg    = 'White'
         SelectedFg  = 'Black'
         SelectedBg  = 'DarkCyan'
+        ActionFg    = 'Cyan'
+        ActionSelectedFg = 'Black'
+        ActionSelectedBg = 'DarkGreen'
+        BackFg      = 'Red'
+        BackSelectedFg = 'White'
+        BackSelectedBg = 'DarkRed'
         MutedFg     = 'DarkGray'
         InputFg     = 'Gray'
     }
+}
+
+function Test-IsBackOption {
+    param([string]$Text)
+    if ([string]::IsNullOrWhiteSpace($Text)) { return $false }
+    $t = $Text.Trim()
+    return ($t -eq 'Back' -or $t -eq 'Cancel' -or $t -eq 'Exit')
+}
+
+function Test-IsActionOption {
+    param([string]$Text)
+    if ([string]::IsNullOrWhiteSpace($Text)) { return $false }
+    $t = $Text.Trim()
+    if (Test-IsBackOption -Text $t) { return $true }
+    if ($t -eq 'Add package') { return $true }
+    if ($t -eq 'Enter manually') { return $true }
+    if ($t -eq 'Set filter' -or $t -eq 'Clear filter') { return $true }
+    if ($t -eq 'Jump to range') { return $true }
+    if ($t -eq '< Prev page' -or $t -eq 'Next page >') { return $true }
+    if ($t -like '(*)') { return $true }
+    return $false
+}
+
+function Test-IsFooterOption {
+    param([string]$Text)
+    if ([string]::IsNullOrWhiteSpace($Text)) { return $false }
+    return (Test-IsBackOption -Text $Text) -or (Test-IsActionOption -Text $Text)
 }
 
 function Get-ConsoleWidthSafe {
@@ -191,6 +224,28 @@ function Show-Menu {
 
         $optionsTop = $row
 
+        $spacerLines = 2
+        $footerStart = $Options.Count
+        for ($i = $Options.Count - 1; $i -ge 0; $i--) {
+            if (Test-IsFooterOption -Text $Options[$i]) {
+                $footerStart = $i
+            } else {
+                break
+            }
+        }
+        $hasFooter = ($footerStart -lt $Options.Count)
+
+        $rowForIndex = @()
+        for ($i = 0; $i -lt $Options.Count; $i++) {
+            $extra = if ($hasFooter -and $i -ge $footerStart) { $spacerLines } else { 0 }
+            $rowForIndex += ($optionsTop + $i + $extra)
+        }
+
+        if ($hasFooter) {
+            Write-ConsoleAt -Left 0 -Top ($optionsTop + $footerStart) -Text "" -ForegroundColor $theme.MutedFg -BackgroundColor ([Console]::BackgroundColor) -ClearToEnd
+            Write-ConsoleAt -Left 0 -Top ($optionsTop + $footerStart + 1) -Text "" -ForegroundColor $theme.MutedFg -BackgroundColor ([Console]::BackgroundColor) -ClearToEnd
+        }
+
         function Render-MenuLine {
             param(
                 [int]$Index,
@@ -198,10 +253,27 @@ function Show-Menu {
             )
             $prefix = if ($Selected) { " > " } else { "   " }
             $text = $prefix + [string]$Options[$Index]
+
+            $top = $rowForIndex[$Index]
+            $isBack = Test-IsBackOption -Text $Options[$Index]
+            $isAction = Test-IsActionOption -Text $Options[$Index]
+
             if ($Selected) {
-                Write-ConsoleAt -Left 0 -Top ($optionsTop + $Index) -Text $text -ForegroundColor $theme.SelectedFg -BackgroundColor $theme.SelectedBg -ClearToEnd
+                if ($isBack) {
+                    Write-ConsoleAt -Left 0 -Top $top -Text $text -ForegroundColor $theme.BackSelectedFg -BackgroundColor $theme.BackSelectedBg -ClearToEnd
+                } elseif ($isAction) {
+                    Write-ConsoleAt -Left 0 -Top $top -Text $text -ForegroundColor $theme.ActionSelectedFg -BackgroundColor $theme.ActionSelectedBg -ClearToEnd
+                } else {
+                    Write-ConsoleAt -Left 0 -Top $top -Text $text -ForegroundColor $theme.SelectedFg -BackgroundColor $theme.SelectedBg -ClearToEnd
+                }
             } else {
-                Write-ConsoleAt -Left 0 -Top ($optionsTop + $Index) -Text $text -ForegroundColor $theme.OptionFg -BackgroundColor ([Console]::BackgroundColor) -ClearToEnd
+                if ($isBack) {
+                    Write-ConsoleAt -Left 0 -Top $top -Text $text -ForegroundColor $theme.BackFg -BackgroundColor ([Console]::BackgroundColor) -ClearToEnd
+                } elseif ($isAction) {
+                    Write-ConsoleAt -Left 0 -Top $top -Text $text -ForegroundColor $theme.ActionFg -BackgroundColor ([Console]::BackgroundColor) -ClearToEnd
+                } else {
+                    Write-ConsoleAt -Left 0 -Top $top -Text $text -ForegroundColor $theme.OptionFg -BackgroundColor ([Console]::BackgroundColor) -ClearToEnd
+                }
             }
         }
 
@@ -277,19 +349,41 @@ function Show-MenuFilter {
     $optionsTop = 0
     $lastRenderedCount = 0
 
+    $spacerLines = 2
+
     function Render-FilterLine {
         param(
             [int]$Index,
             [bool]$Selected
         )
         if ($Index -lt 0 -or $Index -ge $cachedToShow.Count) { return }
-        $lineText = " > $($cachedToShow[$Index])"
-        if (-not $Selected) { $lineText = "   $($cachedToShow[$Index])" }
+        $textVal = [string]$cachedToShow[$Index]
+        $lineText = " > ${textVal}"
+        if (-not $Selected) { $lineText = "   ${textVal}" }
+
+        $pinnedCount = @($PinnedOptions).Count
+        $rowOffset = if ($pinnedCount -gt 0 -and $Index -ge $pinnedCount) { $spacerLines } else { 0 }
+        $top = $optionsTop + $Index + $rowOffset
+
+        $isBack = Test-IsBackOption -Text $textVal
+        $isAction = Test-IsActionOption -Text $textVal
 
         if ($Selected) {
-            Write-ConsoleAt -Left 0 -Top ($optionsTop + $Index) -Text $lineText -ForegroundColor $theme.SelectedFg -BackgroundColor $theme.SelectedBg -ClearToEnd
+            if ($isBack) {
+                Write-ConsoleAt -Left 0 -Top $top -Text $lineText -ForegroundColor $theme.BackSelectedFg -BackgroundColor $theme.BackSelectedBg -ClearToEnd
+            } elseif ($isAction) {
+                Write-ConsoleAt -Left 0 -Top $top -Text $lineText -ForegroundColor $theme.ActionSelectedFg -BackgroundColor $theme.ActionSelectedBg -ClearToEnd
+            } else {
+                Write-ConsoleAt -Left 0 -Top $top -Text $lineText -ForegroundColor $theme.SelectedFg -BackgroundColor $theme.SelectedBg -ClearToEnd
+            }
         } else {
-            Write-ConsoleAt -Left 0 -Top ($optionsTop + $Index) -Text $lineText -ForegroundColor $theme.OptionFg -BackgroundColor ([Console]::BackgroundColor) -ClearToEnd
+            if ($isBack) {
+                Write-ConsoleAt -Left 0 -Top $top -Text $lineText -ForegroundColor $theme.BackFg -BackgroundColor ([Console]::BackgroundColor) -ClearToEnd
+            } elseif ($isAction) {
+                Write-ConsoleAt -Left 0 -Top $top -Text $lineText -ForegroundColor $theme.ActionFg -BackgroundColor ([Console]::BackgroundColor) -ClearToEnd
+            } else {
+                Write-ConsoleAt -Left 0 -Top $top -Text $lineText -ForegroundColor $theme.OptionFg -BackgroundColor ([Console]::BackgroundColor) -ClearToEnd
+            }
         }
     }
 
@@ -377,7 +471,7 @@ function Show-MenuFilter {
             if ($restTotal -gt $pageCapacity) {
                 $pageIdx = [Math]::Floor($offset / $pageCapacity) + 1
                 $pageCount = [Math]::Ceiling($restTotal / [double]$pageCapacity)
-                $pageLabel = "  |  Page ${pageIdx}/${pageCount} (use )"
+                $pageLabel = "  |  Page ${pageIdx}/${pageCount} (Left/Right)"
             }
             Write-ConsoleAt -Left 0 -Top $row -Text ("Matches: {0}{1}" -f $totalLabel, $pageLabel) -ForegroundColor $theme.MutedFg -BackgroundColor ([Console]::BackgroundColor) -ClearToEnd
             $row += 2
@@ -385,6 +479,13 @@ function Show-MenuFilter {
             $cachedToShow = @($matches | Select-Object -First $MaxVisible)
             $optionsTop = $row
             $lastRenderedCount = $cachedToShow.Count
+
+            $pinnedCount = @($PinnedOptions).Count
+            if ($pinnedCount -gt 0 -and $cachedToShow.Count -gt $pinnedCount) {
+                Write-ConsoleAt -Left 0 -Top ($optionsTop + $pinnedCount) -Text "" -ForegroundColor $theme.MutedFg -BackgroundColor ([Console]::BackgroundColor) -ClearToEnd
+                Write-ConsoleAt -Left 0 -Top ($optionsTop + $pinnedCount + 1) -Text "" -ForegroundColor $theme.MutedFg -BackgroundColor ([Console]::BackgroundColor) -ClearToEnd
+            }
+
             for ($i = 0; $i -lt $cachedToShow.Count; $i++) {
                 Render-FilterLine -Index $i -Selected ($i -eq $current)
             }

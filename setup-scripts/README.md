@@ -13,6 +13,7 @@ Wizard UX notes:
 - TUI rendering is more stable (reduced flicker) and uses a modernized color theme.
 - VT/ANSI escape sequences are opt-in: set `VRCSETUP_TUI_VT=1` only if your terminal supports them.
 - Backend commands avoid printing progress lines to keep the TUI clean.
+- Action rows are visually separated (2 blank lines) and color-coded (Back = red).
 - "Setup project" is unified: choose UnityPackage or existing project.
 - VPM packages editor is 2-step: select package → choose action (change version/remove), plus add package (type-to-filter).
 - Bugfix: "Add package" no longer throws and instantly returns to the list.

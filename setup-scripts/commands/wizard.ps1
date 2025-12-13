@@ -252,7 +252,7 @@ function Select-VpmVersion {
         }
 
         if ($total -gt $pageSize) {
-            $header += "Tip: use  to change page faster.`n"
+                $header += "Tip: use Left/Right to change page faster.`n"
         }
 
         $optLatest = "latest"
@@ -634,7 +634,7 @@ function Start-Wizard {
                 }
             }
             4 {
-                Write-Host "Goodbye!" -ForegroundColor Cyan
+                Write-Host " Goodbye!" -ForegroundColor Cyan
                 return
             }
         }
