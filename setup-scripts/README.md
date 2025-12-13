@@ -14,6 +14,10 @@ Wizard UX notes:
 - VPM packages editor is 2-step: select package → choose action (change version/remove), plus add package (type-to-filter).
 - Advanced settings includes naming rules (prefix/suffix/regex remove) and per-unitypackage remembered project names.
 
+Optional tooling:
+- If a local `vrc-get` exe is present, the wizard can search packages and list versions even when the local VCC repos cache is empty.
+	- Put the exe under `setup-scripts/lib/vrc-get/` (any `*.exe` name; `vrc-get.exe` preferred)
+
 - Next steps:
 - Continue modularizing by moving more logic into `commands/installer.ps1` and splitting into smaller commands.
 - Gradual translation of messages to English.

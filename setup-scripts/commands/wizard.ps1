@@ -9,47 +9,15 @@ $scriptDir = (Resolve-Path (Join-Path $cmdDir '..')).Path
 . "${scriptDir}\lib\menu.ps1"
 . "${scriptDir}\lib\utils.ps1"
 . "${scriptDir}\lib\config.ps1"
+. "${scriptDir}\lib\vpm.ps1"
+. "${scriptDir}\lib\vrcget.ps1"
 . "${scriptDir}\commands\installer.ps1"
 $configPath = Join-Path $scriptDir "config\\vrcsetup.json"
-
-$script:VpmVersionsCache = @{}
-$script:LastVpmOutput = $null
 
 # Main installer function is provided by commands\installer.ps1 (Start-Installer)
 
 # --- FUNCTIONS ---
-function Initialize-VpmTestProject {
-    param([string]$ScriptDir)
-    $testProjectPath = Join-Path $ScriptDir ".vpm-validation-cache"
-    if (Test-Path ${testProjectPath}) {
-        return $testProjectPath
-    }
-    Write-Host "Initializing VPM validation cache (first run)..." -ForegroundColor Yellow
-    New-Item -ItemType Directory -Path $testProjectPath -Force | Out-Null
-    $packagesPath = Join-Path $testProjectPath "Packages"
-    New-Item -ItemType Directory -Path $packagesPath -Force | Out-Null
-    $manifest = @{ dependencies = @{ } }
-    $manifest | ConvertTo-Json -Depth 10 | Set-Content (Join-Path $packagesPath "manifest.json") -Encoding UTF8
-    $vpmManifest = @{ dependencies = @{ }; locked = @{ } }
-    $vpmManifest | ConvertTo-Json -Depth 10 | Set-Content (Join-Path $packagesPath "vpm-manifest.json") -Encoding UTF8
-    Write-Host "Cache created at: ${testProjectPath}" -ForegroundColor Green
-    return $testProjectPath
-}
-
-function Invoke-VpmCapture {
-    param(
-        [string[]]$Args
-    )
-
-    $output = ""
-    try {
-        $output = (& vpm @Args 2>&1 | Out-String)
-    } catch {
-        $output = (${_} | Out-String)
-    }
-
-    return @{ ExitCode = $LASTEXITCODE; Output = $output }
-}
+# Backend helpers live in lib\vpm.ps1 and lib\vrcget.ps1
 
 function Get-LastTextLines {
     param(
@@ -80,64 +48,6 @@ function Show-WizardError {
     Read-Host "Press ENTER to continue" | Out-Null
 }
 
-function Test-VpmPackageVersion {
-    param([string]$PackageName, [string]$Version, [string]$ScriptDir)
-
-    if ([string]::IsNullOrWhiteSpace($PackageName)) {
-        return @{ Valid = $false; Message = "Package name is empty" }
-    }
-    if ([string]::IsNullOrWhiteSpace($Version)) {
-        return @{ Valid = $false; Message = "Version is empty" }
-    }
-
-    # Validate existence even for 'latest' (use correct vpm command)
-    if ($Version -eq "latest") {
-        $res = Invoke-VpmCapture -Args @('check', 'package', $PackageName)
-        $script:LastVpmOutput = $res.Output
-        if ($res.ExitCode -eq 0) {
-            return @{ Valid = $true; Message = "Validated with VPM (latest)" }
-        }
-        $tail = Get-LastTextLines -Text $res.Output -MaxLines 25
-        return @{ Valid = $false; Message = "Package not found or not resolvable (latest)"; Details = $tail }
-    }
-
-    Write-Host "Validating ${PackageName}@${Version}..." -ForegroundColor Gray
-    $testProject = Initialize-VpmTestProject -ScriptDir $ScriptDir
-    try {
-        $packageSpec = "${PackageName}@${Version}"
-        $output = vpm add package $packageSpec -p $testProject 2>&1 | Out-String
-        $script:LastVpmOutput = $output
-        if ($LASTEXITCODE -ne 0 -or $output -match "ERR.*Could not get match" -or $output -match "ERR.*not found") {
-            $reposPath = "${env:LOCALAPPDATA}\VRChatCreatorCompanion\Repos"
-            $availableVersions = @()
-            if (Test-Path $reposPath) {
-                Get-ChildItem $reposPath -Filter "*.json" -ErrorAction SilentlyContinue | ForEach-Object {
-                    try {
-                        $repoData = Get-Content $_.FullName -Raw -ErrorAction SilentlyContinue | ConvertFrom-Json
-                        if (${repoData.packages}.${PackageName}) {
-                            $versions = $repoData.packages.$PackageName.versions.PSObject.Properties.Name
-                            if ($versions) { $availableVersions += $versions }
-                        }
-                    } catch { }
-                }
-            }
-                if ($availableVersions.Count -gt 0) {
-                $sortedVersions = $availableVersions | Sort-Object -Descending | Select-Object -First 5
-                $versionList = $sortedVersions -join ", "
-                return @{ Valid = $false; Message = "Version ${Version} not found. Recent versions: ${versionList}" }
-            }
-            $tail = Get-LastTextLines -Text $output -MaxLines 25
-            return @{ Valid = $false; Message = "Version ${Version} not available"; Details = $tail }
-        }
-        Write-Host "Version valid!" -ForegroundColor Green
-        vpm remove package $PackageName -p $testProject 2>&1 | Out-Null
-        return @{ Valid = $true; Message = "Versione verificata con VPM" }
-    } catch {
-        $script:LastVpmOutput = (${_} | Out-String)
-        return @{ Valid = $false; Message = "VPM validation error"; Details = (Get-LastTextLines -Text $script:LastVpmOutput -MaxLines 25) }
-    }
-}
-
 function Normalize-UserPath {
     param([string]$Path)
     if ($null -eq $Path) { return $null }
@@ -145,10 +55,6 @@ function Normalize-UserPath {
     $p = $p.Trim('"')
     $p = $p.Trim("'")
     return $p
-}
-
-function Get-VpmReposPath {
-    return (Join-Path $env:LOCALAPPDATA "VRChatCreatorCompanion\Repos")
 }
 
 function Ensure-ConfigDefaults {
@@ -280,87 +186,29 @@ function Advanced-NamingSettings {
     }
 }
 
-function Get-AllVpmPackageNames {
-    $reposPath = Get-VpmReposPath
-    $names = @()
-    if (Test-Path $reposPath) {
-        Get-ChildItem $reposPath -Filter "*.json" -ErrorAction SilentlyContinue | ForEach-Object {
-            try {
-                $repoData = Get-Content $_.FullName -Raw -ErrorAction SilentlyContinue | ConvertFrom-Json
-                if ($repoData.packages) {
-                    $names += $repoData.packages.PSObject.Properties.Name
-                }
-            } catch { }
-        }
-    }
-    return ($names | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -Unique | Sort-Object)
-}
-
-function Get-VpmAvailableVersions {
-    param([string]$PackageName)
-    if ([string]::IsNullOrWhiteSpace($PackageName)) { return @() }
-
-    if ($script:VpmVersionsCache.ContainsKey($PackageName)) {
-        return $script:VpmVersionsCache[$PackageName]
-    }
-
-    $reposPath = Get-VpmReposPath
-    $available = @()
-    if (Test-Path $reposPath) {
-        Get-ChildItem $reposPath -Filter "*.json" -ErrorAction SilentlyContinue | ForEach-Object {
-            try {
-                $repoData = Get-Content $_.FullName -Raw -ErrorAction SilentlyContinue | ConvertFrom-Json
-                if (${repoData.packages}.${PackageName}) {
-                    $versions = $repoData.packages.$PackageName.versions.PSObject.Properties.Name
-                    if ($versions) {
-                        $available += $versions
-                    }
-                }
-            } catch { }
-        }
-    }
-
-    $available = $available | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -Unique
-    $available = $available | Sort-Object -Descending
-
-    $script:VpmVersionsCache[$PackageName] = @($available)
-    return $script:VpmVersionsCache[$PackageName]
-}
-
-function Test-VpmPackageExists {
-    param([string]$PackageName)
-
-    if ([string]::IsNullOrWhiteSpace($PackageName)) { return $false }
-
-    # Source of truth: VPM itself.
-    $res = Invoke-VpmCapture -Args @('check', 'package', $PackageName)
-    $script:LastVpmOutput = $res.Output
-    if ($res.ExitCode -eq 0) { return $true }
-
-    # Secondary: VPM show (some installs support show better than check).
-    $res2 = Invoke-VpmCapture -Args @('show', 'package', $PackageName)
-    $script:LastVpmOutput = $res2.Output
-    if ($res2.ExitCode -eq 0) { return $true }
-
-    # Fallback: local VCC repos cache (useful for version listing).
-    $versions = Get-VpmAvailableVersions -PackageName $PackageName
-    if ($versions.Count -gt 0) { return $true }
-
-    return $false
-}
-
 function Select-VpmVersion {
     param(
         [string]$PackageName,
         [string]$CurrentVersion
     )
 
-    $available = Get-VpmAvailableVersions -PackageName $PackageName
+    $available = @()
+    $sourceLabel = $null
+
+    $vrcGetVersions = Get-VrcGetAvailableVersions -PackageName $PackageName -ScriptDir $scriptDir
+    if ($vrcGetVersions.Count -gt 0) {
+        $available = $vrcGetVersions
+        $sourceLabel = "vrc-get"
+    } else {
+        $available = Get-VpmAvailableVersions -PackageName $PackageName
+        $sourceLabel = "VCC repos"
+    }
+
     $header = "Package: ${PackageName}`nCurrent: ${CurrentVersion}`n"
     if ($available.Count -gt 0) {
-        $header += "Versions found locally: ${($available.Count)} (from VCC repos)`n"
+        $header += "Versions found: ${($available.Count)} (from ${sourceLabel})`n"
     } else {
-        $header += "No versions found locally. You can still enter manually.`n"
+        $header += "No versions found. You can still enter manually.`n"
     }
 
     $options = @("latest")
@@ -427,17 +275,67 @@ function Edit-VpmPackages {
         if ($picked -eq "Add package") {
             $allPackages = Get-AllVpmPackageNames
             $manualOption = "(Enter package name manually)"
-            $opts = @($manualOption) + @($allPackages)
+            $searchOption = "(Search packages with vrc-get)"
+            $hasVrcGet = -not [string]::IsNullOrWhiteSpace((Get-VrcGetExecutablePath -ScriptDir $ScriptDir))
+
+            $opts = @()
+            $pinned = @()
+            if ($hasVrcGet) {
+                $opts += $searchOption
+                $pinned += $searchOption
+            }
+            $opts += $manualOption
+            $pinned += $manualOption
+            $opts += @($allPackages)
+
+            $hint = "Type to filter. Enter selects. If no match, Enter uses the typed text."
+            if (($allPackages.Count -eq 0) -and (-not $hasVrcGet)) {
+                $hint += "`nTip: put vrc-get .exe under setup-scripts/lib/vrc-get/ to enable search."
+            }
             $pickedName = Show-MenuFilter \
                 -Title "Add package" \
-                -Header "Type to filter. Enter selects. If no match, Enter uses the typed text." \
+                -Header $hint \
                 -Options $opts \
-                -PinnedOptions @($manualOption) \
+                -PinnedOptions $pinned \
                 -Placeholder "type package name (e.g. gogoloco, poiyomi)"
             if ($null -eq $pickedName) { continue }
 
             $newPackage = $null
-            if ($pickedName -eq $manualOption) {
+            if ($pickedName -eq $searchOption) {
+                $q = Read-Host "Search query"
+                $q = $q.Trim()
+                if ([string]::IsNullOrWhiteSpace($q)) { continue }
+
+                $found = Search-VrcGetPackages -Query $q -ScriptDir $ScriptDir
+                if ($found.Count -eq 0) {
+                    $tail = Get-LastTextLines -Text (Get-VrcSetupLastToolOutput) -MaxLines 25
+                    Show-WizardError -Title "No matches" -Message "No packages matched: ${q}" -Details $tail
+                    continue
+                }
+
+                $displayOptions = @()
+                foreach ($x in $found) {
+                    if ($x.DisplayName) {
+                        $displayOptions += ("{0} ({1})" -f $x.DisplayName, $x.Id)
+                    } else {
+                        $displayOptions += $x.Id
+                    }
+                }
+
+                $pickStr = Show-MenuFilter \
+                    -Title "Search results" \
+                    -Header "Select a package from vrc-get search results." \
+                    -Options $displayOptions \
+                    -Placeholder "type to filter results"
+
+                if ($null -eq $pickStr) { continue }
+
+                # Map back to Id
+                $idx = [array]::IndexOf($displayOptions, $pickStr)
+                if ($idx -lt 0) { continue }
+                $newPackage = $found[$idx].Id
+            }
+            elseif ($pickedName -eq $manualOption) {
                 $newPackage = Read-Host "Package name"
                 $newPackage = $newPackage.Trim()
             } else {
@@ -458,8 +356,8 @@ function Edit-VpmPackages {
                 continue
             }
 
-            if (-not (Test-VpmPackageExists -PackageName $newPackage)) {
-                $tail = Get-LastTextLines -Text $script:LastVpmOutput -MaxLines 25
+            if (-not (Test-VpmPackageExists -PackageName $newPackage -ScriptDir $ScriptDir)) {
+                $tail = Get-LastTextLines -Text (Get-VrcSetupLastToolOutput) -MaxLines 25
                 Show-WizardError -Title "Package not found" -Message "Package not found / not resolvable: ${newPackage}" -Details $tail
                 continue
             }
@@ -469,7 +367,11 @@ function Edit-VpmPackages {
 
             $validation = Test-VpmPackageVersion -PackageName $newPackage -Version $version -ScriptDir $ScriptDir
             if (-not $validation.Valid) {
-                Show-WizardError -Title "Validation failed" -Message $validation.Message -Details $validation.Details
+                $details = $validation.Details
+                if ([string]::IsNullOrWhiteSpace($details)) {
+                    $details = Get-LastTextLines -Text (Get-VrcSetupLastToolOutput) -MaxLines 25
+                }
+                Show-WizardError -Title "Validation failed" -Message $validation.Message -Details $details
                 continue
             }
 
@@ -489,8 +391,8 @@ function Edit-VpmPackages {
         if ($action -eq -1 -or $action -eq 2) { continue }
 
         if ($action -eq 0) {
-            if (-not (Test-VpmPackageExists -PackageName $pkgName)) {
-                $tail = Get-LastTextLines -Text $script:LastVpmOutput -MaxLines 25
+            if (-not (Test-VpmPackageExists -PackageName $pkgName -ScriptDir $ScriptDir)) {
+                $tail = Get-LastTextLines -Text (Get-VrcSetupLastToolOutput) -MaxLines 25
                 Show-WizardError -Title "Package not found" -Message "Package not found / not resolvable: ${pkgName}" -Details $tail
                 continue
             }
@@ -500,7 +402,11 @@ function Edit-VpmPackages {
 
             $validation = Test-VpmPackageVersion -PackageName $pkgName -Version $newVersion -ScriptDir $ScriptDir
             if (-not $validation.Valid) {
-                Show-WizardError -Title "Validation failed" -Message $validation.Message -Details $validation.Details
+                $details = $validation.Details
+                if ([string]::IsNullOrWhiteSpace($details)) {
+                    $details = Get-LastTextLines -Text (Get-VrcSetupLastToolOutput) -MaxLines 25
+                }
+                Show-WizardError -Title "Validation failed" -Message $validation.Message -Details $details
                 continue
             }
 

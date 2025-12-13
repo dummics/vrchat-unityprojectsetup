@@ -78,6 +78,19 @@ Example config snippet:
 - You can specify exact versions like `"3.5.0"` to lock to a specific release.
 - The wizard validates versions with VPM (fail-fast) and can also show selectable versions from the local VCC repos cache.
 
+## 🔎 Optional: `vrc-get` (better search + versions)
+
+If you ship `vrc-get` as a local portable exe, the wizard can:
+- Search packages using `vrc-get search <query...>` (works even when the local VCC repos cache is empty)
+- List available versions using `vrc-get info package <id> --json-format 1`
+
+Portable setup (recommended for this repo):
+- Download the prebuilt Windows binary from the official releases.
+- Put it under:
+    - `setup-scripts/lib/vrc-get/` (any `*.exe` name is accepted; `vrc-get.exe` is preferred)
+
+If the local exe is missing, the scripts fall back to `vpm` + local VCC cache.
+
 ## 🧠 Advanced naming
 
 In `setup-scripts/config/vrcsetup.json` you can store naming preferences used when creating a project from a UnityPackage:
