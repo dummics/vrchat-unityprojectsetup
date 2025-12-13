@@ -10,11 +10,15 @@ Structure:
 
 Wizard UX notes:
 - Main menu uses arrow-key selection.
+- TUI rendering is more stable (reduced flicker) and uses a modernized color theme.
+- VT/ANSI escape sequences are opt-in: set `VRCSETUP_TUI_VT=1` only if your terminal supports them.
+- Backend commands avoid printing progress lines to keep the TUI clean.
 - "Setup project" is unified: choose UnityPackage or existing project.
 - VPM packages editor is 2-step: select package → choose action (change version/remove), plus add package (type-to-filter).
 - Bugfix: "Add package" no longer throws and instantly returns to the list.
 - Versions list is SemVer-sorted (e.g. 0.1.29 > 0.1.9).
 - Version picker supports paging + filter patterns (e.g. *.9, X.X.1190, or re:<regex>).
+- In paged lists, use  to change page quickly.
 - Advanced settings includes naming rules (prefix/suffix/regex remove) and per-unitypackage remembered project names.
 
 Optional tooling:

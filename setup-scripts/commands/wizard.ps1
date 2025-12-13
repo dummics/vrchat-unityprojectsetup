@@ -251,6 +251,10 @@ function Select-VpmVersion {
             $header += "No matches for current filter.`n"
         }
 
+        if ($total -gt $pageSize) {
+            $header += "Tip: use  to change page faster.`n"
+        }
+
         $optLatest = "latest"
         $optPrev = "< Prev page"
         $optNext = "Next page >"
@@ -269,8 +273,10 @@ function Select-VpmVersion {
         if (-not [string]::IsNullOrWhiteSpace($filterPattern)) { $options += $optClearFilter }
         $options += @($optEnter, $optBack)
 
-        $sel = Show-Menu -Title "Select version" -Header $header -Options $options
+        $sel = Show-Menu -Title "Select version" -Header $header -Options $options -EnableHorizontalNav ($total -gt $pageSize)
         if ($sel -eq -1) { return $null }
+        if ($sel -eq -2) { $page--; continue }
+        if ($sel -eq -3) { $page++; continue }
 
         $picked = $options[$sel]
         if ($picked -eq $optBack) { return $null }
@@ -476,8 +482,6 @@ function Edit-VpmPackages {
 
             $config.VpmPackages | Add-Member -MemberType NoteProperty -Name $newPackage -Value $version -Force
             Save-Config -Config $config -ConfigPath $ConfigPath
-            Write-Host "Package added: ${newPackage} @ ${version}" -ForegroundColor Green
-            Start-Sleep -Seconds 1
             continue
         }
 
@@ -511,8 +515,6 @@ function Edit-VpmPackages {
 
             $config.VpmPackages.($pkgName) = $newVersion
             Save-Config -Config $config -ConfigPath $ConfigPath
-            Write-Host "Updated: ${pkgName} @ ${newVersion}" -ForegroundColor Green
-            Start-Sleep -Seconds 1
             continue
         }
 
@@ -521,8 +523,6 @@ function Edit-VpmPackages {
             if ($confirm -eq 0) {
                 $config.VpmPackages.PSObject.Properties.Remove($pkgName)
                 Save-Config -Config $config -ConfigPath $ConfigPath
-                Write-Host "Removed: ${pkgName}" -ForegroundColor Green
-                Start-Sleep -Seconds 1
             }
             continue
         }

@@ -10,6 +10,5 @@ function Save-Config {
     param($Config, [string]$ConfigPath)
     if (-not $ConfigPath) { throw 'ConfigPath required' }
     $Config | ConvertTo-Json -Depth 10 | Set-Content $ConfigPath -Encoding UTF8
-    Write-Host "Configuration saved to: ${ConfigPath}" -ForegroundColor Green
 }
 

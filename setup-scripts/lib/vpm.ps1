@@ -194,7 +194,6 @@ function Test-VpmPackageVersion {
         return @{ Valid = $false; Message = "Package not found or not resolvable (latest)" }
     }
 
-    Write-Host "Validating ${PackageName}@${Version}..." -ForegroundColor Gray
     $testProject = Initialize-VpmTestProject -ScriptDir $ScriptDir
     try {
         $packageSpec = "${PackageName}@${Version}"
@@ -225,7 +224,6 @@ function Test-VpmPackageVersion {
             return @{ Valid = $false; Message = "Version ${Version} not available" }
         }
 
-        Write-Host "Version valid!" -ForegroundColor Green
         vpm remove package $PackageName -p $testProject 2>&1 | Out-Null
         return @{ Valid = $true; Message = "Version verified with VPM" }
     } catch {

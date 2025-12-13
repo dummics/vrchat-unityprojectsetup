@@ -1,12 +1,12 @@
 ﻿{
     "VpmPackages":  {
-                        "com.vrchat.base":  "latest",
-                        "com.vrchat.avatars":  "latest",
+                        "com.vrchat.base":  "3.10.1",
+                        "com.vrchat.avatars":  "3.10.1",
                         "com.poiyomi.toon":  "latest",
                         "adjerry91.vrcft.templates":  "6.8.0",
                         "com.vrcfury.vrcfury":  "latest",
-                        "gogoloco":  "latest",
-                        "com.vrchat.core.vpm-resolver":  "latest"
+                        "gogoloco":  "1.8.6",
+                        "com.vrchat.core.vpm-resolver":  "0.1.29"
                     },
     "UnityEditorPath":  "C:\\Program Files\\Unity\\Hub\\Editor\\2022.3.22f1\\Editor\\Unity.exe",
     "UnityProjectsRoot":  "F:\\UNITY PROJECTS",
