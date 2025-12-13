@@ -122,7 +122,7 @@ function Get-VpmAvailableVersions {
     }
 
     $available = $available | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -Unique
-    $available = $available | Sort-Object -Descending
+    $available = Sort-SemVerDescending -Versions $available
 
     $script:VpmVersionsCache[$PackageName] = @($available)
     return $script:VpmVersionsCache[$PackageName]

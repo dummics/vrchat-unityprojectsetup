@@ -98,7 +98,7 @@ function Get-VrcGetAvailableVersions {
             }
         }
         $versions = $versions | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -Unique
-        $versions = $versions | Sort-Object -Descending
+        $versions = Sort-SemVerDescending -Versions $versions
         $script:VrcGetVersionsCache[$PackageName] = @($versions)
         return $script:VrcGetVersionsCache[$PackageName]
     } catch {

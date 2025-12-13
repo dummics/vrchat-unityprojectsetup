@@ -204,30 +204,127 @@ function Select-VpmVersion {
         $sourceLabel = "VCC repos"
     }
 
-    $header = "Package: ${PackageName}`nCurrent: ${CurrentVersion}`n"
-    if ($available.Count -gt 0) {
-        $header += "Versions found: ${($available.Count)} (from ${sourceLabel})`n"
-    } else {
-        $header += "No versions found. You can still enter manually.`n"
+    $pageSize = 20
+    $page = 0
+    $filterPattern = $null
+
+    while ($true) {
+        $filtered = @($available)
+        if (-not [string]::IsNullOrWhiteSpace($filterPattern)) {
+            $filtered = @($available | Where-Object { Test-VersionMatchesPattern -Version $_ -Pattern $filterPattern })
+        }
+
+        $total = $filtered.Count
+
+        if ($total -le 0) {
+            $page = 0
+        } else {
+            $maxPage = [Math]::Max(0, [Math]::Floor(($total - 1) / $pageSize))
+            if ($page -gt $maxPage) { $page = $maxPage }
+            if ($page -lt 0) { $page = 0 }
+        }
+
+        $startIdx = if ($total -gt 0) { $page * $pageSize } else { 0 }
+        $endIdx = if ($total -gt 0) { [Math]::Min($startIdx + $pageSize - 1, $total - 1) } else { -1 }
+
+        $pageItems = @()
+        if ($total -gt 0) {
+            if ($startIdx -eq $endIdx) {
+                $pageItems = @($filtered[$startIdx])
+            } else {
+                $pageItems = @($filtered[$startIdx..$endIdx])
+            }
+        }
+
+        $header = "Package: ${PackageName}`nCurrent: ${CurrentVersion}`n"
+        if ($available.Count -gt 0) {
+            $header += "Versions found: ${($available.Count)} (from ${sourceLabel})`n"
+        } else {
+            $header += "No versions found. You can still enter manually.`n"
+        }
+
+        $fLabel = if ([string]::IsNullOrWhiteSpace($filterPattern)) { "(none)" } else { $filterPattern }
+        $header += "Filter: ${fLabel}`n"
+        if ($total -gt 0) {
+            $header += ("Showing: {0}-{1} of {2} (page {3})`n" -f ($startIdx + 1), ($endIdx + 1), $total, ($page + 1))
+        } else {
+            $header += "No matches for current filter.`n"
+        }
+
+        $optLatest = "latest"
+        $optPrev = "< Prev page"
+        $optNext = "Next page >"
+        $optJump = "Jump to range"
+        $optSetFilter = "Set filter"
+        $optClearFilter = "Clear filter"
+        $optEnter = "Enter manually"
+        $optBack = "Back"
+
+        $options = @($optLatest)
+        $options += @($pageItems)
+        if ($total -gt $pageSize) { $options += $optJump }
+        if ($page -gt 0) { $options += $optPrev }
+        if (($page + 1) * $pageSize -lt $total) { $options += $optNext }
+        $options += $optSetFilter
+        if (-not [string]::IsNullOrWhiteSpace($filterPattern)) { $options += $optClearFilter }
+        $options += @($optEnter, $optBack)
+
+        $sel = Show-Menu -Title "Select version" -Header $header -Options $options
+        if ($sel -eq -1) { return $null }
+
+        $picked = $options[$sel]
+        if ($picked -eq $optBack) { return $null }
+
+        if ($picked -eq $optPrev) { $page--; continue }
+        if ($picked -eq $optNext) { $page++; continue }
+
+        if ($picked -eq $optSetFilter) {
+            Write-Host "Filter pattern examples:" -ForegroundColor DarkGray
+            Write-Host "  *.9        (ends with .9)" -ForegroundColor DarkGray
+            Write-Host "  X.X.1190   (digits.digits.1190)" -ForegroundColor DarkGray
+            Write-Host "  re:1190$   (regex mode)" -ForegroundColor DarkGray
+            $newFilter = Read-Host "Filter (*, ?, X) or re:<regex> (blank = cancel)"
+            if (-not [string]::IsNullOrWhiteSpace($newFilter)) {
+                $filterPattern = $newFilter.Trim()
+                $page = 0
+            }
+            continue
+        }
+
+        if ($picked -eq $optClearFilter) {
+            $filterPattern = $null
+            $page = 0
+            continue
+        }
+
+        if ($picked -eq $optJump) {
+            if ($total -le 0) { continue }
+            $in = Read-Host "Range start-end (e.g. 41-60) or start (e.g. 81). Blank = cancel"
+            if ([string]::IsNullOrWhiteSpace($in)) { continue }
+            $txt = $in.Trim()
+            $start = $null
+            if ($txt -match '^(?<a>\d+)\s*-\s*(?<b>\d+)$') {
+                $start = [int]$Matches['a']
+            } elseif ($txt -match '^(?<a>\d+)$') {
+                $start = [int]$Matches['a']
+            }
+            if ($null -eq $start -or $start -lt 1) { continue }
+            $idx = $start - 1
+            if ($idx -ge $total) { $idx = $total - 1 }
+            $page = [Math]::Floor($idx / $pageSize)
+            continue
+        }
+
+        if ($picked -eq $optEnter) {
+            $manual = Read-Host "Version (or 'latest')"
+            if ([string]::IsNullOrWhiteSpace($manual)) { return $null }
+            return $manual.Trim()
+        }
+
+        # Selected a version or "latest"
+        return $picked
+        }
     }
-
-    $options = @("latest")
-    $options += ($available | Select-Object -First 20)
-    $options += @("Enter manually", "Back")
-
-    $sel = Show-Menu -Title "Select version" -Header $header -Options $options
-    if ($sel -eq -1) { return $null }
-
-    $picked = $options[$sel]
-    if ($picked -eq "Back") { return $null }
-    if ($picked -eq "Enter manually") {
-        $manual = Read-Host "Version (or 'latest')"
-        if ([string]::IsNullOrWhiteSpace($manual)) { return $null }
-        return $manual.Trim()
-    }
-
-    return $picked
-}
 
 function Edit-VpmPackages {
     param(

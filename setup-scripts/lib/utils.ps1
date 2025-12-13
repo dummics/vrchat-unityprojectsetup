@@ -39,3 +39,166 @@ function Install-NUnitPackage {
     }
 }
 
+function ConvertTo-SemVerParts {
+    param(
+        [string]$Version
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Version)) {
+        return [pscustomobject]@{ IsValid = $false; Original = $Version }
+    }
+
+    $v = $Version.Trim()
+    if ($v.StartsWith('v')) { $v = $v.Substring(1) }
+
+    # Supports: 1.2.3, 1.2, 1, plus optional prerelease/build: 1.2.3-beta.1+meta
+    $m = [regex]::Match($v, '^(?<maj>\d+)(?:\.(?<min>\d+))?(?:\.(?<pat>\d+))?(?:-(?<pre>[0-9A-Za-z\-\.]+))?(?:\+(?<build>.*))?$')
+    if (-not $m.Success) {
+        return [pscustomobject]@{ IsValid = $false; Original = $Version }
+    }
+
+    $maj = [int]$m.Groups['maj'].Value
+    $min = if ($m.Groups['min'].Success) { [int]$m.Groups['min'].Value } else { 0 }
+    $pat = if ($m.Groups['pat'].Success) { [int]$m.Groups['pat'].Value } else { 0 }
+    $pre = if ($m.Groups['pre'].Success) { [string]$m.Groups['pre'].Value } else { $null }
+
+    $preParts = @()
+    if (-not [string]::IsNullOrWhiteSpace($pre)) {
+        $preParts = $pre.Split('.') | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+    }
+
+    return [pscustomobject]@{
+        IsValid = $true
+        Original = $Version
+        Major = $maj
+        Minor = $min
+        Patch = $pat
+        PreReleaseParts = @($preParts)
+        HasPreRelease = ($preParts.Count -gt 0)
+    }
+}
+
+function Compare-SemVer {
+    param(
+        [string]$A,
+        [string]$B
+    )
+
+    $pa = ConvertTo-SemVerParts -Version $A
+    $pb = ConvertTo-SemVerParts -Version $B
+
+    if (-not $pa.IsValid -or -not $pb.IsValid) {
+        # Fallback: lexical compare (case-insensitive)
+        return [string]::Compare([string]$A, [string]$B, $true, [Globalization.CultureInfo]::InvariantCulture)
+    }
+
+    if ($pa.Major -ne $pb.Major) { return $pa.Major.CompareTo($pb.Major) }
+    if ($pa.Minor -ne $pb.Minor) { return $pa.Minor.CompareTo($pb.Minor) }
+    if ($pa.Patch -ne $pb.Patch) { return $pa.Patch.CompareTo($pb.Patch) }
+
+    # Release > prerelease
+    if ($pa.HasPreRelease -and -not $pb.HasPreRelease) { return -1 }
+    if (-not $pa.HasPreRelease -and $pb.HasPreRelease) { return 1 }
+    if (-not $pa.HasPreRelease -and -not $pb.HasPreRelease) { return 0 }
+
+    $aParts = @($pa.PreReleaseParts)
+    $bParts = @($pb.PreReleaseParts)
+    $max = [Math]::Max($aParts.Count, $bParts.Count)
+
+    for ($i = 0; $i -lt $max; $i++) {
+        if ($i -ge $aParts.Count) { return -1 } # shorter prerelease is lower precedence
+        if ($i -ge $bParts.Count) { return 1 }
+
+        $ai = [string]$aParts[$i]
+        $bi = [string]$bParts[$i]
+
+        $aIsNum = $ai -match '^\d+$'
+        $bIsNum = $bi -match '^\d+$'
+
+        if ($aIsNum -and $bIsNum) {
+            $an = [int]$ai
+            $bn = [int]$bi
+            if ($an -ne $bn) { return $an.CompareTo($bn) }
+            continue
+        }
+
+        # Numeric identifiers always have lower precedence than non-numeric
+        if ($aIsNum -and -not $bIsNum) { return -1 }
+        if (-not $aIsNum -and $bIsNum) { return 1 }
+
+        $cmp = [string]::Compare($ai, $bi, $false, [Globalization.CultureInfo]::InvariantCulture)
+        if ($cmp -ne 0) { return $cmp }
+    }
+
+    return 0
+}
+
+function Sort-SemVerDescending {
+    param(
+        [string[]]$Versions
+    )
+
+    if (-not $Versions) { return @() }
+
+    $list = [System.Collections.Generic.List[string]]::new()
+    foreach ($x in $Versions) {
+        if (-not [string]::IsNullOrWhiteSpace($x)) { [void]$list.Add([string]$x) }
+    }
+
+    $list.Sort([System.Comparison[string]]{
+        param($x, $y)
+        # Descending: invert the ascending compare
+        return -1 * (Compare-SemVer -A $x -B $y)
+    })
+
+    return $list.ToArray()
+}
+
+function Test-VersionMatchesPattern {
+    param(
+        [string]$Version,
+        [string]$Pattern
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Pattern)) { return $true }
+    if ([string]::IsNullOrWhiteSpace($Version)) { return $false }
+
+    $p = $Pattern.Trim()
+
+    # Optional raw regex mode: re:<regex>
+    if ($p.Length -ge 3 -and $p.Substring(0, 3).ToLowerInvariant() -eq 're:') {
+        $rx = $p.Substring(3)
+        if ([string]::IsNullOrWhiteSpace($rx)) { return $true }
+        try {
+            return [regex]::IsMatch($Version, $rx)
+        } catch {
+            return $false
+        }
+    }
+
+    # Simple pattern language:
+    #  - '*' => any chars
+    #  - '?' => any single char
+    #  - 'X' => one or more digits
+    # Everything else is literal.
+    $sb = [System.Text.StringBuilder]::new()
+    [void]$sb.Append('^')
+    foreach ($ch in $p.ToCharArray()) {
+        switch ($ch) {
+            '*' { [void]$sb.Append('.*') }
+            '?' { [void]$sb.Append('.') }
+            'X' { [void]$sb.Append('\d+') }
+            default {
+                [void]$sb.Append([regex]::Escape([string]$ch))
+            }
+        }
+    }
+    [void]$sb.Append('$')
+
+    try {
+        return [regex]::IsMatch($Version, $sb.ToString())
+    } catch {
+        return $false
+    }
+}
+
